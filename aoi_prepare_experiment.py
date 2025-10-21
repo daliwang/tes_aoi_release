@@ -109,9 +109,9 @@ def render_run_forcing_sbatch(cfg: dict, scripts_dir: Path, exp_root: Path) -> s
     lines.append("")
     lines.append("# Source exported environment if present")
     lines.append("if [ -f ./export_env.sh ]; then . ./export_env.sh; fi")
-    
+
     lines.append("SRC_ROOT=$(git rev-parse --show-toplevel)")
-    lines.append("EXP_ROOT=\"${SRC_ROOT}/{expid}\"")
+    lines.append("EXP_ROOT=\"${SRC_ROOT}/${EXPID}\"")
     
     lines.append("echo \"EXP_ROOT: ${EXP_ROOT}\"")
     lines.append("echo \"SRC_ROOT: ${SRC_ROOT}\"")
