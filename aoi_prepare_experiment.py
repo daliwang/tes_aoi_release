@@ -43,21 +43,10 @@ def render_run_domain_surfdata_sh(cfg: dict, scripts_dir: Path, exp_root: Path) 
     surf_dir = cfg["source"]["surfdata_dir"].rstrip("/")
     surf_file = cfg["source"]["surfdata_file"]
 
-    scheduler = cfg.get("scheduler", {})
-    module_line = scheduler.get("module", "")
-    conda_activate = scheduler.get("conda_activate", "")
 
     lines = []
     lines.append("#!/bin/bash")
     lines.append("set -euo pipefail")
-    if module_line:
-        lines.append(f"module load {module_line}")
-    if conda_activate:
-        # Use new 'conda activate' if string seems like env name, otherwise 'source activate' for explicit path
-        if os.path.sep in conda_activate:
-            lines.append(f"source activate {conda_activate}")
-        else:
-            lines.append(f"conda activate {conda_activate}")
     lines.append("")
     lines.append("cd \"$(dirname \"$0\")\"")
     lines.append("# Source exported environment if present")
@@ -103,8 +92,7 @@ def render_run_forcing_sbatch(cfg: dict, scripts_dir: Path, exp_root: Path) -> s
     nodes = scheduler.get("nodes", 1)
     time_limit = scheduler.get("time", "2:00:00")
     mem = scheduler.get("mem", "128GB")
-    module_line = scheduler.get("module", "")
-    conda_activate = scheduler.get("conda_activate", "")
+
 
     lines = []
     lines.append("#!/bin/bash")
@@ -117,13 +105,7 @@ def render_run_forcing_sbatch(cfg: dict, scripts_dir: Path, exp_root: Path) -> s
     lines.append(f"#SBATCH --mem={mem}")
     lines.append("")
     lines.append("set -euo pipefail")
-    if module_line:
-        lines.append(f"module load {module_line}")
-    if conda_activate:
-        if os.path.sep in conda_activate:
-            lines.append(f"source activate {conda_activate}")
-        else:
-            lines.append(f"conda activate {conda_activate}")
+
     lines.append("")
 
     lines.append("SRC_ROOT=$(git rev-parse --show-toplevel)")

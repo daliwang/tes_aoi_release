@@ -10,8 +10,8 @@ Key features
 
 Quickstart (CADES)
 1) Set up and activate the Python environment (CADES)
-```bash
-module load python
+```bash    (add source /sw/baseline/nsp/init/profile  in .bashrc)
+module load miniforge3
 conda create -p /path/to/my_env python=3.11   (e.g. /gpfs/wolf2/cades/cli185/proj-shared/wangd/my_env)
 source activate /path/to/my_env
 
@@ -20,8 +20,18 @@ conda install -c conda-forge netcdf4 numpy pandas scipy pyproj mpi4py
 ```
 Optional alternatives:
 ```bash
-# If you already have an env
-source /gpfs/wolf2/cades/cli185/proj-shared/wangd/venv_python311/bin/activate
+# If you want to source an existing python env for kiloCraft on baseline
+# add the following commands into your .bashrc 
+
+#  use the new default software stack
+source /sw/baseline/nsp/init/profile
+
+#  use this command wisely, as it will purge all the previous modules
+module purge
+
+# load and activate existing venv for kiloCraft
+module load miniforge3
+source /gpfs/wolf2/cades/cli185/proj-shared/wangd/kiloCraft/python_test_env/activate_shared_env.sh /gpfs/wolf2/cades/cli185/proj-shared/wangd/kiloCraft/python_test_env/conda_envs/testvenv miniforge3 
 ```
 
 2) Use one of the provided configs (edit if needed)
