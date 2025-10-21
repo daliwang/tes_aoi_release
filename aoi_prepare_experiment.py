@@ -107,16 +107,17 @@ def render_run_forcing_sbatch(cfg: dict, scripts_dir: Path, exp_root: Path) -> s
     lines.append("set -euo pipefail")
 
     lines.append("")
-
+    lines.append("# Source exported environment if present")
+    lines.append("if [ -f ./export_env.sh ]; then . ./export_env.sh; fi")
+    
     lines.append("SRC_ROOT=$(git rev-parse --show-toplevel)")
-    lines.append("EXP_ROOT=\"${SRC_ROOT}/${EXPID}\"")
+    lines.append("EXP_ROOT=\"${SRC_ROOT}/{expid}\"")
     
     lines.append("echo \"EXP_ROOT: ${EXP_ROOT}\"")
     lines.append("echo \"SRC_ROOT: ${SRC_ROOT}\"")
 
     lines.append("cd \"${EXP_ROOT}/scripts\"")
-    lines.append("# Source exported environment if present")
-    lines.append("if [ -f ./export_env.sh ]; then . ./export_env.sh; fi")
+
     lines.append("")
     lines.append("date_string=$(date +'%y%m%d-%H%M')")
     lines.append(f": \"${{EXPID:={expid}}}\"")
