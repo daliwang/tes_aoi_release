@@ -27,11 +27,16 @@ Optional alternatives:
 source /sw/baseline/nsp/init/profile
 
 #  use this command wisely, as it will purge all the previous modules
-module purge
+(OPTIONAL) module purge  
 
 # load and activate existing venv for kiloCraft
 module load miniforge3
 source /gpfs/wolf2/cades/cli185/proj-shared/wangd/kiloCraft/python_test_env/activate_shared_env.sh /gpfs/wolf2/cades/cli185/proj-shared/wangd/kiloCraft/python_test_env/conda_envs/testvenv miniforge3 
+
+which python; python -V
+python -c "import sys; print(sys.executable); import netCDF4; print(netCDF4.__version__)"
+
+export PS1="\[\e]0;\u@\h: \w\a\]\u@\h:\w\$ "
 ```
 
 2) Use one of the provided configs (edit if needed)
