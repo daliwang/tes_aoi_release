@@ -3,7 +3,6 @@
 import argparse
 import json
 import os
-import re
 import shutil
 import stat
 import sys
@@ -298,7 +297,7 @@ def render_export_env_sh(cfg: dict, exp_root: Path) -> str:
 def render_create_uelm_adspin_sh(cfg: dict, exp_root: Path) -> str:
     expid = cfg["expid"]
     e3sm = cfg.get("e3sm", {})
-    din_root = e3sm.get("din_root", "//gpfs/wolf2/cades/cli185/world-shared/e3sm")
+    din_root = e3sm.get("din_root", "//gpfs/wolf2/cades/cli185/world-shared/e3sm/inputdata/")
     mach = e3sm.get("mach", "cades-baseline")
     compiler = e3sm.get("compiler", "gnu")
     mpilib = e3sm.get("mpilib", "openmpi")
@@ -434,78 +433,10 @@ def _derive_template_vars_from_cfg(cfg: dict) -> tuple[str, str, str]:
     return kilocraft_root, tes_domain_forcing_group_id, tes_data_group_id
 
 
-def _replace_assignment(script_text: str, var_name: str, value: str) -> str:
-    # Replace lines like VAR="..." preserving quotes
-    pattern = re.compile(rf'^(\s*{re.escape(var_name)}=)".*"\s*$', re.MULTILINE)
-    return pattern.sub(rf'\1"{value}"', script_text)
-
-
-def render_create_uelm_adspin_from_template(cfg: dict, scripts_root: Path, exp_root: Path) -> str:
-    template_path = scripts_root / "TES_case_creation_template.sh"
-    if not template_path.exists():
-        # Fallback to old renderer if template is missing
-        return render_create_uelm_adspin_sh(cfg, exp_root)
-
-    script = template_path.read_text()
-
-    expid = cfg["expid"]
-    e3sm = cfg.get("e3sm", {})
-    kmelm_root = e3sm.get("src_root", "").rstrip("/")
-    din_root = e3sm.get("din_root", "")
-    compset = e3sm.get("compset", "")
-
-    kilocraft_root, tes_group_id, tes_data_group_id = _derive_template_vars_from_cfg(cfg)
-
-    # Ensure trailing slashes to match template style
-    if kmelm_root:
-        kmelm_root = kmelm_root + "/"
-    if not kilocraft_root.endswith("/"):
-        kilocraft_root = kilocraft_root + "/"
-
-    # Perform targeted replacements
-    script = _replace_assignment(script, "EXPID", expid)
-    if kmelm_root:
-        script = _replace_assignment(script, "KMELM_ROOT", kmelm_root)
-    if kilocraft_root:
-        script = _replace_assignment(script, "KILOCRAFT_ROOT", kilocraft_root)
-    if din_root:
-        script = _replace_assignment(script, "E3SM_DIN", din_root)
-    if compset:
-        script = _replace_assignment(script, "CASE_COMPSET", compset)
-    if tes_group_id:
-        script = _replace_assignment(script, "TES_DOMAIN_FORCING_GROUP_ID", tes_group_id)
-    if tes_data_group_id:
-        script = _replace_assignment(script, "TES_DATA_GROUP_ID", tes_data_group_id)
-
-    # Ensure CASE_DATA points to the experiment root (parent of scripts)
-    script = re.sub(
-        r'^\s*CASE_DATA=.*$',
-        'CASE_DATA="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"',
-        script,
-        flags=re.MULTILINE,
-    )
-
-    # Make DOMAIN_FILE and SURFDATA_FILE dynamic based on latest timestamp in CASE_DATA
-    script = re.sub(
-        r'^\s*DOMAIN_FILE=.*$',
-        'DOMAIN_FILE=$(ls -1 ${CASE_DATA}/domain_surfdata/${EXPID}_domain.lnd.${TES_DATA_GROUP_ID}.4km.1d.c*.nc 2>/dev/null | sort | tail -n1 | xargs -r basename)',
-        script,
-        flags=re.MULTILINE,
-    )
-    script = re.sub(
-        r'^\s*SURFDATA_FILE=.*$',
-        'SURFDATA_FILE=$(ls -1 ${CASE_DATA}/domain_surfdata/${EXPID}_surfdata.${TES_DATA_GROUP_ID}.4km.1d.NLCD.c*.nc 2>/dev/null | sort | tail -n1 | xargs -r basename)',
-        script,
-        flags=re.MULTILINE,
-    )
-
-    return script
-
-
 def render_create_uelm_finalspin_sh(cfg: dict, exp_root: Path) -> str:
     expid = cfg["expid"]
     e3sm = cfg.get("e3sm", {})
-    din_root = e3sm.get("din_root", "//gpfs/wolf2/cades/cli185/world-shared/e3sm")
+    din_root = e3sm.get("din_root", "//gpfs/wolf2/cades/cli185/world-shared/e3sm/inputdata/")
     src_root = e3sm.get("src_root", "$(git rev-parse --show-toplevel)")
     mach = e3sm.get("mach", "cades-baseline")
     compiler = e3sm.get("compiler", "gnu")
@@ -616,6 +547,257 @@ def render_create_uelm_finalspin_sh(cfg: dict, exp_root: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_create_uelm_transient1_sh(cfg: dict, exp_root: Path) -> str:
+    """Create first transient case (Phase 1: 1850 start, 150 years)."""
+    expid = cfg["expid"]
+    e3sm = cfg.get("e3sm", {})
+    din_root = e3sm.get("din_root", "//gpfs/wolf2/cades/cli185/world-shared/e3sm/inputdata/")
+    mach = e3sm.get("mach", "cades-baseline")
+    compiler = e3sm.get("compiler", "gnu")
+    mpilib = e3sm.get("mpilib", "openmpi")
+    base_compset = e3sm.get("compset", "I1850CNPRDCTCBC")
+    transient_compset = e3sm.get("transient_compset", "I20TRCNPRDCTCBC")
+
+    kilocraft_root, tes_domain_forcing_group_id, tes_data_group_id = _derive_template_vars_from_cfg(cfg)
+    if not kilocraft_root.endswith("/"):
+        kilocraft_root = kilocraft_root + "/"
+
+    lines: list[str] = []
+    lines.append("#!/bin/bash")
+    lines.append("set -e")
+    lines.append("")
+    lines.append(f'KILOCRAFT_ROOT="{kilocraft_root}"')
+    lines.append('KMELM_ROOT="/gpfs/wolf2/cades/cli185/proj-shared/wangd/kmELM/"')
+    lines.append('KMELM_CASE_ROOT="${KMELM_ROOT}/e3sm_cases/"')
+    lines.append('KMELM_RUN_ROOT="${KMELM_ROOT}/e3sm_runs/"')
+    lines.append('E3SM_SRC_ROOT="${KMELM_ROOT}/E3SM/"')
+    lines.append(f'E3SM_DIN="{din_root}"')
+    lines.append("")
+    lines.append('TES_DATA_ROOT="$KILOCRAFT_ROOT/TES_cases_data/"')
+    if tes_domain_forcing_group_id:
+        lines.append(f'TES_DOMAIN_FORCING_GROUP_ID="{tes_domain_forcing_group_id}"')
+    else:
+        lines.append('TES_DOMAIN_FORCING_GROUP_ID=""')
+    lines.append(f'TES_DATA_GROUP_ID="{tes_data_group_id}"')
+    lines.append("")
+    lines.append(f'EXPID="{expid}"')
+    lines.append(f'CASE_COMPSET="{transient_compset}"')
+    lines.append("")
+    lines.append('# Transient case directory (Phase 1: 1850 start, 150 years)')
+    lines.append('CASEDIR="$KMELM_CASE_ROOT/${TES_DOMAIN_FORCING_GROUP_ID}/uELM_${EXPID}_${CASE_COMPSET}_transient1"')
+    lines.append('CASE_DATA="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"')
+    lines.append("")
+    # CO2 stream file from external 20TR case (matches helene example)
+    lines.append('# CO2 stream file for transient (20TR); copy into case dir (installed as user_datm.streams.txt.co2tseries.20tr)')
+    lines.append('CO2_STREAM_SRC="/gpfs/wolf2/cades/cli185/proj-shared/zdr/e3sm_cases/20260225_Southeast_hires_single_I20TRCNPRDCTCBC/uuser_datm.streams.txt.co2tseries.20tr"')
+    lines.append("")
+    # Discover latest domain/surfdata filenames
+    lines.append("DOMAIN_FILE=$(ls -1 ${CASE_DATA}/domain_surfdata/${EXPID}_domain.lnd.${TES_DATA_GROUP_ID}.4km.1d.c*.nc 2>/dev/null | sort | tail -n1 | xargs -r basename)")
+    lines.append('if [ -z "${DOMAIN_FILE}" ]; then echo \'ERROR: Domain file not found\'; exit 2; fi')
+    lines.append("SURFDATA_FILE=$(ls -1 ${CASE_DATA}/domain_surfdata/${EXPID}_surfdata.${TES_DATA_GROUP_ID}.4km.1d.NLCD.c*.nc 2>/dev/null | sort | tail -n1 | xargs -r basename)")
+    lines.append('if [ -z "${SURFDATA_FILE}" ]; then echo \'ERROR: Surfdata file not found\'; exit 2; fi')
+    lines.append("")
+    lines.append('rm -rf "${CASEDIR}"')
+    lines.append("")
+    lines.append('${E3SM_SRC_ROOT}/cime/scripts/create_newcase --case "${CASEDIR}" --mach cades-baseline --compiler gnu --mpilib openmpi --compset "${CASE_COMPSET}" --res ELM_USRDAT  --handle-preexisting-dirs r --srcroot "${E3SM_SRC_ROOT}"')
+    lines.append("")
+    lines.append('cd "${CASEDIR}"')
+    lines.append("")
+    lines.append('./xmlchange PIO_TYPENAME="pnetcdf"')
+    lines.append('./xmlchange PIO_NETCDF_FORMAT="64bit_data"')
+    lines.append('./xmlchange DIN_LOC_ROOT="${E3SM_DIN}"')
+    lines.append('./xmlchange DIN_LOC_ROOT_CLMFORC="${CASE_DATA}"')
+    lines.append('./xmlchange CIME_OUTPUT_ROOT="$KMELM_RUN_ROOT"')
+    lines.append("")
+    lines.append("# Data mode and domain bindings")
+    lines.append('./xmlchange DATM_MODE="uELM_TES"')
+    lines.append('./xmlchange ATM_DOMAIN_PATH="${CASE_DATA}/domain_surfdata/"')
+    lines.append('./xmlchange ATM_DOMAIN_FILE="${DOMAIN_FILE}"')
+    lines.append('./xmlchange LND_DOMAIN_PATH="${CASE_DATA}/domain_surfdata/"')
+    lines.append('./xmlchange LND_DOMAIN_FILE="${DOMAIN_FILE}"')
+    lines.append("")
+    lines.append("# Scientific configuration for transient Phase 1 (1850 start, 150 years)")
+    lines.append('./xmlchange STOP_N="150"')
+    lines.append('./xmlchange REST_N="50"')
+    lines.append('./xmlchange STOP_OPTION="nyears"')
+    lines.append('./xmlchange ATM_NCPL="24"')
+    lines.append('./xmlchange DATM_CLMNCEP_YR_START="1980"')
+    lines.append('./xmlchange DATM_CLMNCEP_YR_END="1999"')
+    lines.append('./xmlchange DATM_CLMNCEP_YR_ALIGN="1990"')
+    lines.append('./xmlchange CONTINUE_RUN="FALSE"')
+    lines.append('./xmlchange ELM_ACCELERATED_SPINUP="off"')
+    lines.append('./xmlchange ELM_BLDNML_OPTS="-bgc bgc -nutrient cnp -nutrient_comp_pathway rd  -soil_decomp ctc -methane"')
+    lines.append('./xmlchange RUN_TYPE="hybrid"')
+    lines.append('./xmlchange RUN_STARTDATE="1850-01-01"')
+    lines.append("")
+    lines.append("# Copy CO2 stream file for transient into case directory (destination uses standard name user_datm...)")
+    lines.append('if [ -f "${CO2_STREAM_SRC}" ]; then')
+    lines.append('  cp "${CO2_STREAM_SRC}" "${CASEDIR}/user_datm.streams.txt.co2tseries.20tr"')
+    lines.append("else")
+    lines.append('  ALT_CO2_SRC="/gpfs/wolf2/cades/cli185/proj-shared/zdr/e3sm_cases/20260225_Southeast_hires_single_I20TRCNPRDCTCBC/user_datm.streams.txt.co2tseries.20tr"')
+    lines.append('  if [ -f "${ALT_CO2_SRC}" ]; then')
+    lines.append('    cp "${ALT_CO2_SRC}" "${CASEDIR}/user_datm.streams.txt.co2tseries.20tr"')
+    lines.append("  else")
+    lines.append('    echo "WARNING: CO2 stream file not found at ${CO2_STREAM_SRC} or ${ALT_CO2_SRC}; copy manually if needed."')
+    lines.append("  fi")
+    lines.append("fi")
+    lines.append("")
+    lines.append("cat >> user_nl_elm <<EOF")
+    lines.append("!finidat = '/gpfs/wolf2/cades/cli185/scratch/zdr/e3sm_run/20260225_Southeast_hires_single_I1850CNPRDCTCBC/run/20260225_Southeast_hires_single_I1850CNPRDCTCBC.elm.r.0401-01-01-00000.nc'")
+    lines.append(
+        f"finidat = '${{KMELM_RUN_ROOT}}/uELM_${{EXPID}}_{base_compset}_finalspin/run/uELM_${{EXPID}}_{base_compset}_finalspin.elm.r.0801-01-01-00000.nc'"
+    )
+    lines.append("fsurdat = '${CASE_DATA}/domain_surfdata/${SURFDATA_FILE}'")
+    lines.append("do_budgets = .false.")
+    lines.append("flanduse_timeseries = ''")
+    lines.append("check_finidat_fsurdat_consistency = .false.")
+    lines.append("check_finidat_year_consistency = .false.")
+    lines.append("")
+    lines.append("spinup_state = 0")
+    lines.append("suplphos = 'NONE'")
+    lines.append("hist_nhtfrq=0")
+    lines.append("hist_mfilt=1")
+    lines.append("EOF")
+    lines.append("")
+    lines.append("# Computational resources")
+    lines.append('./xmlchange NTASKS="1"')
+    lines.append('./xmlchange NTASKS_PER_INST="1"')
+    lines.append('./xmlchange MAX_MPITASKS_PER_NODE="1"')
+    lines.append('./xmlchange JOB_WALLCLOCK_TIME="6:00:00"')
+    lines.append("")
+    lines.append("./case.setup --reset")
+    lines.append("./case.setup")
+    lines.append("")
+    lines.append("./case.build --clean-all")
+    lines.append("./case.build")
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def render_create_uelm_transient2_sh(cfg: dict, exp_root: Path) -> str:
+    """Create second transient case (Phase 2: 2000 start, 25 years)."""
+    expid = cfg["expid"]
+    e3sm = cfg.get("e3sm", {})
+    din_root = e3sm.get("din_root", "//gpfs/wolf2/cades/cli185/world-shared/e3sm/inputdata/")
+    mach = e3sm.get("mach", "cades-baseline")
+    compiler = e3sm.get("compiler", "gnu")
+    mpilib = e3sm.get("mpilib", "openmpi")
+    transient_compset = e3sm.get("transient_compset", "I20TRCNPRDCTCBC")
+
+    kilocraft_root, tes_domain_forcing_group_id, tes_data_group_id = _derive_template_vars_from_cfg(cfg)
+    if not kilocraft_root.endswith("/"):
+        kilocraft_root = kilocraft_root + "/"
+
+    lines: list[str] = []
+    lines.append("#!/bin/bash")
+    lines.append("set -e")
+    lines.append("")
+    lines.append(f'KILOCRAFT_ROOT="{kilocraft_root}"')
+    lines.append('KMELM_ROOT="/gpfs/wolf2/cades/cli185/proj-shared/wangd/kmELM/"')
+    lines.append('KMELM_CASE_ROOT="${KMELM_ROOT}/e3sm_cases/"')
+    lines.append('KMELM_RUN_ROOT="${KMELM_ROOT}/e3sm_runs/"')
+    lines.append('E3SM_SRC_ROOT="${KMELM_ROOT}/E3SM/"')
+    lines.append(f'E3SM_DIN="{din_root}/"')
+    lines.append("")
+    lines.append('TES_DATA_ROOT="$KILOCRAFT_ROOT/TES_cases_data/"')
+    if tes_domain_forcing_group_id:
+        lines.append(f'TES_DOMAIN_FORCING_GROUP_ID="{tes_domain_forcing_group_id}"')
+    else:
+        lines.append('TES_DOMAIN_FORCING_GROUP_ID=""')
+    lines.append(f'TES_DATA_GROUP_ID="{tes_data_group_id}"')
+    lines.append("")
+    lines.append(f'EXPID="{expid}"')
+    lines.append(f'CASE_COMPSET="{transient_compset}"')
+    lines.append("")
+    lines.append('# Transient case directory (Phase 2: 2000 start, 25 years)')
+    lines.append('CASEDIR="$KMELM_CASE_ROOT/${TES_DOMAIN_FORCING_GROUP_ID}/uELM_${EXPID}_${CASE_COMPSET}_transient2"')
+    lines.append('CASE_DATA="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"')
+    lines.append("")
+    # CO2 stream file from external 20TR case (matches helene example)
+    lines.append('# CO2 stream file for transient (20TR); copy into case dir (installed as user_datm.streams.txt.co2tseries.20tr)')
+    lines.append('CO2_STREAM_SRC="/gpfs/wolf2/cades/cli185/proj-shared/zdr/e3sm_cases/20260225_Southeast_hires_single_I20TRCNPRDCTCBC/uuser_datm.streams.txt.co2tseries.20tr"')
+    lines.append("")
+    # Discover latest domain/surfdata filenames
+    lines.append("DOMAIN_FILE=$(ls -1 ${CASE_DATA}/domain_surfdata/${EXPID}_domain.lnd.${TES_DATA_GROUP_ID}.4km.1d.c*.nc 2>/dev/null | sort | tail -n1 | xargs -r basename)")
+    lines.append('if [ -z "${DOMAIN_FILE}" ]; then echo \'ERROR: Domain file not found\'; exit 2; fi')
+    lines.append("SURFDATA_FILE=$(ls -1 ${CASE_DATA}/domain_surfdata/${EXPID}_surfdata.${TES_DATA_GROUP_ID}.4km.1d.NLCD.c*.nc 2>/dev/null | sort | tail -n1 | xargs -r basename)")
+    lines.append('if [ -z "${SURFDATA_FILE}" ]; then echo \'ERROR: Surfdata file not found\'; exit 2; fi')
+    lines.append("")
+    lines.append('rm -rf "${CASEDIR}"')
+    lines.append("")
+    lines.append('${E3SM_SRC_ROOT}/cime/scripts/create_newcase --case "${CASEDIR}" --mach cades-baseline --compiler gnu --mpilib openmpi --compset "${CASE_COMPSET}" --res ELM_USRDAT  --handle-preexisting-dirs r --srcroot "${E3SM_SRC_ROOT}"')
+    lines.append("")
+    lines.append('cd "${CASEDIR}"')
+    lines.append("")
+    lines.append('./xmlchange PIO_TYPENAME="pnetcdf"')
+    lines.append('./xmlchange PIO_NETCDF_FORMAT="64bit_data"')
+    lines.append('./xmlchange DIN_LOC_ROOT="${E3SM_DIN}"')
+    lines.append('./xmlchange DIN_LOC_ROOT_CLMFORC="${CASE_DATA}"')
+    lines.append('./xmlchange CIME_OUTPUT_ROOT="$KMELM_RUN_ROOT"')
+    lines.append("")
+    lines.append("# Data mode and domain bindings")
+    lines.append('./xmlchange DATM_MODE="uELM_TES"')
+    lines.append('./xmlchange ATM_DOMAIN_PATH="${CASE_DATA}/domain_surfdata/"')
+    lines.append('./xmlchange ATM_DOMAIN_FILE="${DOMAIN_FILE}"')
+    lines.append('./xmlchange LND_DOMAIN_PATH="${CASE_DATA}/domain_surfdata/"')
+    lines.append('./xmlchange LND_DOMAIN_FILE="${DOMAIN_FILE}"')
+    lines.append("")
+    lines.append("# Scientific configuration for transient Phase 2 (2000 start, 25 years)")
+    lines.append('./xmlchange STOP_N="25"')
+    lines.append('./xmlchange REST_N="25"')
+    lines.append('./xmlchange STOP_OPTION="nyears"')
+    lines.append('./xmlchange ATM_NCPL="24"')
+    lines.append('./xmlchange DATM_CLMNCEP_YR_START="2000"')
+    lines.append('./xmlchange DATM_CLMNCEP_YR_END="2024"')
+    lines.append('./xmlchange DATM_CLMNCEP_YR_ALIGN="1990"')
+    lines.append('./xmlchange CONTINUE_RUN="FALSE"')
+    lines.append('./xmlchange ELM_ACCELERATED_SPINUP="off"')
+    lines.append('./xmlchange ELM_BLDNML_OPTS="-bgc bgc -nutrient cnp -nutrient_comp_pathway rd  -soil_decomp ctc -methane"')
+    lines.append('./xmlchange RUN_TYPE="hybrid"')
+    lines.append('./xmlchange RUN_STARTDATE="2000-01-01"')
+    lines.append("")
+    lines.append("# Copy CO2 stream file for transient into case directory (destination uses standard name user_datm...)")
+    lines.append('if [ -f "${CO2_STREAM_SRC}" ]; then')
+    lines.append('  cp "${CO2_STREAM_SRC}" "${CASEDIR}/user_datm.streams.txt.co2tseries.20tr"')
+    lines.append("else")
+    lines.append('  ALT_CO2_SRC="/gpfs/wolf2/cades/cli185/proj-shared/zdr/e3sm_cases/20260225_Southeast_hires_single_I20TRCNPRDCTCBC/user_datm.streams.txt.co2tseries.20tr"')
+    lines.append('  if [ -f "${ALT_CO2_SRC}" ]; then')
+    lines.append('    cp "${ALT_CO2_SRC}" "${CASEDIR}/user_datm.streams.txt.co2tseries.20tr"')
+    lines.append("  else")
+    lines.append('    echo "WARNING: CO2 stream file not found at ${CO2_STREAM_SRC} or ${ALT_CO2_SRC}; copy manually if needed."')
+    lines.append("  fi")
+    lines.append("fi")
+    lines.append("")
+    lines.append("cat >> user_nl_elm <<EOF")
+    lines.append("!finidat = '/gpfs/wolf2/cades/cli185/scratch/zdr/e3sm_run/20260225_Southeast_hires_single_I1850CNPRDCTCBC/run/20260225_Southeast_hires_single_I1850CNPRDCTCBC.elm.r.0401-01-01-00000.nc'")
+    lines.append("finidat = '${KMELM_RUN_ROOT}/uELM_${EXPID}_${CASE_COMPSET}_transient1/run/uELM_${EXPID}_${CASE_COMPSET}_transient1.elm.r.2000-01-01-00000.nc'")
+    lines.append("fsurdat = '${CASE_DATA}/domain_surfdata/${SURFDATA_FILE}'")
+    lines.append("do_budgets = .false.")
+    lines.append("flanduse_timeseries = ''")
+    lines.append("check_finidat_fsurdat_consistency = .false.")
+    lines.append("check_finidat_year_consistency = .false.")
+    lines.append("")
+    lines.append("spinup_state = 0")
+    lines.append("suplphos = 'NONE'")
+    lines.append("hist_nhtfrq=0")
+    lines.append("hist_mfilt=1")
+    lines.append("EOF")
+    lines.append("")
+    lines.append("# Computational resources")
+    lines.append('./xmlchange NTASKS="1"')
+    lines.append('./xmlchange NTASKS_PER_INST="1"')
+    lines.append('./xmlchange MAX_MPITASKS_PER_NODE="1"')
+    lines.append('./xmlchange JOB_WALLCLOCK_TIME="2:00:00"')
+    lines.append("")
+    lines.append("./case.setup --reset")
+    lines.append("./case.setup")
+    lines.append("")
+    lines.append("./case.build --clean-all")
+    lines.append("./case.build")
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 def _expand_expid_placeholders(value: str, expid: str) -> str:
     if not isinstance(value, str):
         return value
@@ -721,8 +903,7 @@ def main() -> None:
     write_text_file(user_scripts_dir / "export_env.sh", export_env_sh)
     make_executable(user_scripts_dir / "export_env.sh")
 
-    # Add uELM adspin creator (from updated template)
-    #create_uelm_adspin = render_create_uelm_adspin_from_template(cfg, scripts_root, exp_root)
+    # Add uELM adspin creator
     create_uelm_adspin = render_create_uelm_adspin_sh(cfg, exp_root)
     write_text_file(user_scripts_dir / "create_uELM_adspin.sh", create_uelm_adspin)
     make_executable(user_scripts_dir / "create_uELM_adspin.sh")
@@ -731,6 +912,15 @@ def main() -> None:
     create_uelm_finalspin = render_create_uelm_finalspin_sh(cfg, exp_root)
     write_text_file(user_scripts_dir / "create_uELM_finalspin.sh", create_uelm_finalspin)
     make_executable(user_scripts_dir / "create_uELM_finalspin.sh")
+
+    # Add uELM transient creators
+    create_uelm_transient1 = render_create_uelm_transient1_sh(cfg, exp_root)
+    write_text_file(user_scripts_dir / "create_uELM_transient1.sh", create_uelm_transient1)
+    make_executable(user_scripts_dir / "create_uELM_transient1.sh")
+
+    create_uelm_transient2 = render_create_uelm_transient2_sh(cfg, exp_root)
+    write_text_file(user_scripts_dir / "create_uELM_transient2.sh", create_uelm_transient2)
+    make_executable(user_scripts_dir / "create_uELM_transient2.sh")
 
     # Optionally execute steps now
     if args.run_domain_surfdata:

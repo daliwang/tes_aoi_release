@@ -28,7 +28,7 @@
     ]
   },
   "e3sm": {
-    "din_root": "//gpfs/wolf2/cades/cli185/world-shared/e3sm",
+    "din_root": "/gpfs/wolf2/cades/cli185/world-shared/e3sm/inputdata",
     "src_root": "/gpfs/wolf2/cades/cli185/proj-shared/wangd/kmELM",
     "mach": "cades-baseline",
     "compiler": "gnu",
