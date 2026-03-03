@@ -1,0 +1,38 @@
+{
+  "_comments": [
+    "TES North ERA5 10% random subdomain. Create TESNorthGridIDs.nc first with select_random_gridids.py.",
+    "expid is used in script outputs and case names."
+  ],
+  "expid": "TESNorthERA510PCT",
+  "experiment_root": "./TESNorthERA510PCT",
+  "aoi_points": {
+    "dir": ".",
+    "file": "TESNorthGridIDs.nc"
+  },
+  "source": {
+    "base_domain_file": "/gpfs/wolf2/cades/cli185/proj-shared/wangd/kiloCraft/TES_cases_data/Daymet_ERA5_TESSFA_NORTH/entire_domain/domain_surfdata/NORTHERA5_domain.lnd.TES_NORTHERA5.4km.1d.c251009.nc",
+    "surfdata_dir": "/gpfs/wolf2/cades/cli185/proj-shared/zdr/hires_data/landcover/NALCMS",
+    "surfdata_file": "surfdata.TESSFA_DOMAIN1.4km.1d.NALCMS.c260218_yw.nc",
+    "forcing_dir": "/gpfs/wolf2/cades/cli185/proj-shared/wangd/kiloCraft/TES_cases_data/Daymet_ERA5_TESSFA_NORTH/entire_domain/forcing"
+  },
+  "scheduler": {
+    "account": "CLI185",
+    "partition": "batch_ccsi",
+    "nodes": 1,
+    "time": "12:00:00",
+    "mem": "500GB",
+    "tasks": 4,
+    "bootstrap": [
+      "source /sw/baseline/nsp/init/profile",
+      "source /gpfs/wolf2/cades/cli185/proj-shared/wangd/kiloCraft/python_test_env/activate_shared_env.sh"
+    ]
+  },
+  "e3sm": {
+    "din_root": "/gpfs/wolf2/cades/cli185/world-shared/e3sm/inputdata",
+    "src_root": "/gpfs/wolf2/cades/cli185/proj-shared/wangd/kmELM",
+    "mach": "cades-baseline",
+    "compiler": "gnu",
+    "mpilib": "openmpi",
+    "compset": "I1850CNPRDCTCBC"
+  }
+}
