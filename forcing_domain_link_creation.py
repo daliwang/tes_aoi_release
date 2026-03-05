@@ -21,17 +21,20 @@ files = glob.glob('../forcing/**/*', recursive=True)
 
 # Loop through the files
 for file in files:
-    # Check if 'clmforc' is in the file name
-    if 'clmforc' in file:
-        # Split the file name on '_'
-        parts = os.path.basename(file).split('_')
+    base = os.path.basename(file)
+    # Accept both legacy 'clmforc' and mistaken 'climforc' spellings
+    if 'clmforc' in base or 'climforc' in base:
+        # Normalize so downstream logic always sees 'clmforc'
+        norm_base = base.replace('climforc', 'clmforc')
 
-        # Check if there is at least one underscore and construct the link name
+        # Split the normalized file name on '_'
+        parts = norm_base.split('_')
+
+        # Drop the AOI/case prefix when constructing link_name
         if len(parts) > 1:
-            # Join parts[1:] back together with '_' to form the new link name
             link_name = '_'.join(parts[1:])
         else:
-            link_name = os.path.basename(file)
+            link_name = norm_base
 
         prefix = "clmforc."
         suffix = ".1d"
@@ -46,9 +49,6 @@ for file in files:
 
         # Create a soft link in the target directory
         link_path = os.path.join(path, new_link_name)
-
-        #command = f'ln -s "{file}" "{link_path}"'
-        #print(command)
 
         # Only create the link if it does not already exist
         if not os.path.exists(link_path):

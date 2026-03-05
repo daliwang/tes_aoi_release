@@ -136,6 +136,8 @@ def render_run_domain_surfdata_sh(cfg: dict, scripts_dir: Path, exp_root: Path) 
     base_domain_file = cfg["source"]["base_domain_file"]
     surf_dir = cfg["source"]["surfdata_dir"].rstrip("/")
     surf_file = cfg["source"]["surfdata_file"]
+    # Optional TES data group id for naming domain/surfdata (e.g., TES_SE, TES_NORTHERA5)
+    _, _, tes_data_group_id = _derive_template_vars_from_cfg(cfg)
     scheduler = cfg.get("scheduler", {})
     bootstrap_lines = scheduler.get("bootstrap", [])
 
@@ -159,6 +161,7 @@ def render_run_domain_surfdata_sh(cfg: dict, scripts_dir: Path, exp_root: Path) 
     lines.append(f'SCRIPT_DIR="{(exp_root / "scripts").as_posix()}"')
     lines.append(f": \"${{AOI_POINTS_DIR:={aoi_dir}}}\"")
     lines.append(f": \"${{AOI_POINTS_FILE:={aoi_file}}}\"")
+    lines.append(f": \"${{TES_DATA_GROUP_ID:={tes_data_group_id}}}\"")
     lines.append(f": \"${{BASE_DOMAIN_FILE:={base_domain_file}}}\"")
     lines.append(f": \"${{SURFDATA_DIR:={surf_dir}}}\"")
     lines.append(f": \"${{SURFDATA_FILE:={surf_file}}}\"")
@@ -166,8 +169,8 @@ def render_run_domain_surfdata_sh(cfg: dict, scripts_dir: Path, exp_root: Path) 
     lines.append("mkdir -p \"${DOM_SURF_DIR}\"")
     lines.append("")
     lines.append("# Ensure domain source file is available with expected local name")
-    lines.append("if [ ! -e domain.lnd.TES_SE.4km.1d.nc ]; then")
-    lines.append("  ln -sf \"${BASE_DOMAIN_FILE}\" domain.lnd.TES_SE.4km.1d.nc")
+    lines.append("if [ ! -e domain.lnd.\"${TES_DATA_GROUP_ID}\".4km.1d.nc ]; then")
+    lines.append("  ln -sf \"${BASE_DOMAIN_FILE}\" domain.lnd.\"${TES_DATA_GROUP_ID}\".4km.1d.nc")
     lines.append("fi")
     lines.append("")
     lines.append("echo \"[1/2] Generating AOI domain...\"")
@@ -175,7 +178,7 @@ def render_run_domain_surfdata_sh(cfg: dict, scripts_dir: Path, exp_root: Path) 
     lines.append("")
     lines.append("echo \"Resolving latest AOI domain file...\"")
     lines.append("AOI_PREFIX=\"$(echo \"${AOI_POINTS_FILE}\" | awk -F'_' '{print $1}')\"")
-    lines.append("AOI_DOMAIN=$(ls -1 ${DOM_SURF_DIR}/${AOI_PREFIX}_domain.lnd.TES_SE.4km.1d.c*.nc 2>/dev/null | sort | tail -n1)")
+    lines.append("AOI_DOMAIN=$(ls -1 ${DOM_SURF_DIR}/${AOI_PREFIX}_domain.lnd.\"${TES_DATA_GROUP_ID}\".4km.1d.c*.nc 2>/dev/null | sort | tail -n1)")
     lines.append("if [ -z \"${AOI_DOMAIN}\" ]; then echo 'ERROR: AOI domain file not found'; exit 2; fi")
     lines.append("")
     lines.append("echo \"[2/2] Generating AOI surfdata...\"")
@@ -272,6 +275,9 @@ def render_export_env_sh(cfg: dict, exp_root: Path) -> str:
     surf_file = cfg["source"]["surfdata_file"]
     forcing_dir = cfg["source"]["forcing_dir"].rstrip("/")
 
+    # Derive TES data group id once for downstream scripts
+    _, _, tes_data_group_id = _derive_template_vars_from_cfg(cfg)
+
     scheduler = cfg.get("scheduler", {})
 
     lines = []
@@ -281,6 +287,7 @@ def render_export_env_sh(cfg: dict, exp_root: Path) -> str:
     lines.append(f"export EXP_ROOT=\"{exp_root.as_posix()}\"")
     lines.append(f"export AOI_POINTS_DIR=\"{aoi_dir}\"")
     lines.append(f"export AOI_POINTS_FILE=\"{aoi_file}\"")
+    lines.append(f"export TES_DATA_GROUP_ID=\"{tes_data_group_id}\"")
     lines.append(f"export BASE_DOMAIN_FILE=\"{base_domain_file}\"")
     lines.append(f"export SURFDATA_DIR=\"{surf_dir}\"")
     lines.append(f"export SURFDATA_FILE=\"{surf_file}\"")
@@ -407,7 +414,16 @@ def render_create_uelm_adspin_sh(cfg: dict, exp_root: Path) -> str:
 
 
 def _derive_template_vars_from_cfg(cfg: dict) -> tuple[str, str, str]:
-    base_domain_path = Path(cfg["source"]["base_domain_file"]).expanduser()
+    """
+    Return (kilocraft_root, tes_domain_forcing_group_id, tes_data_group_id)
+
+    tes_data_group_id precedence:
+      1) Explicit cfg["source"]["tesdata_group_id"] (or "tes_data_group_id")
+      2) Parsed from base_domain_file: domain.lnd.<GROUP>.4km...
+      3) Fallback "TES_SE"
+    """
+    source_cfg = cfg.get("source", {})
+    base_domain_path = Path(source_cfg.get("base_domain_file", "")).expanduser()
     parts = base_domain_path.parts
     # Derive KILOCRAFT_ROOT (up to and including 'kiloCraft')
     if "kiloCraft" in parts:
@@ -424,11 +440,22 @@ def _derive_template_vars_from_cfg(cfg: dict) -> tuple[str, str, str]:
     else:
         tes_domain_forcing_group_id = ""
 
-    # Derive TES_DATA_GROUP_ID from filename pattern: domain.lnd.<GROUP>.4km...
-    filename = base_domain_path.name
-    # Example: domain.lnd.TES_SE.4km.1d.c240827.nc -> TES_SE
-    tokens = filename.split(".")
-    tes_data_group_id = tokens[2] if len(tokens) > 2 else "TES_SE"
+    # Start with optional explicit TES data group id from config
+    explicit_tes_data_group_id = (
+        source_cfg.get("tesdata_group_id")
+        or source_cfg.get("tes_data_group_id")
+        or ""
+    )
+
+    tes_data_group_id: str
+    if explicit_tes_data_group_id:
+        tes_data_group_id = explicit_tes_data_group_id
+    else:
+        # Derive TES_DATA_GROUP_ID from filename pattern: domain.lnd.<GROUP>.4km...
+        filename = base_domain_path.name
+        # Example: domain.lnd.TES_SE.4km.1d.c240827.nc -> TES_SE
+        tokens = filename.split(".")
+        tes_data_group_id = tokens[2] if len(tokens) > 2 else "TES_SE"
 
     return kilocraft_root, tes_domain_forcing_group_id, tes_data_group_id
 

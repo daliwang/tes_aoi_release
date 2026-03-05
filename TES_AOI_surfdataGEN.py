@@ -85,7 +85,7 @@ def main():
     print(TES_gridcell_list[0:5])
 
     # get the index of AOI_points in the TES_gridcell_list
-    domain_idx = np.where(np.in1d(TES_gridcell_list, AOI_points))[0]
+    domain_idx = np.where(np.isin(TES_gridcell_list, AOI_points))[0]
 
     # domain_idx = np.sort(domain_idx).squeeze()
     print("gridID_idx", domain_idx[0:10])

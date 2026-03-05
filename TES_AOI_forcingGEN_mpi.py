@@ -43,7 +43,7 @@ def AOI_forcing_save_1d(input_path, file, AOI, AOI_points, output_path):
 
     grid_ids = src['gridID'][...]  # global gridID array
 
-    AOI_idx = np.where(np.in1d(grid_ids, AOI_points))[0]
+    AOI_idx = np.where(np.isin(grid_ids, AOI_points))[0]
     AOI_mask = np.isin(grid_ids, AOI_points)
 
     dst_name = output_path + '/' + AOI + '_' + file

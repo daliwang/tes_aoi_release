@@ -43,7 +43,7 @@ def main():
         print(" <input_path>: path to the AOI_points_file")
         print(" <output_path>:  path for the 1D AOI output data directory")
         print(" <AOI_points_file>:  <AOI>_gridID.nc (or.csv) or <AOI>_xcyc.csv or <AOI>_xcyc_lcc.csv")
-        print(" The code uses TES domain (./domain.lnd.TES_SE.4km.1d.c<yymmdd>.nc) to generation 1D AOI domain.nc")      
+        print(" The code uses a TES 1D domain (from BASE_DOMAIN_FILE env if set, otherwise ./domain.lnd.TES_SE.4km.1d.c<yymmdd>.nc) to generate 1D AOI domain.nc")
         exit(0)
     
     input_path = args[0]
@@ -62,12 +62,18 @@ def main():
     AOI=AOI_gridcell_file.split("_")[0]
     AOI_gridcell_file = input_path +'/'+ AOI_gridcell_file    
 
-    if 'gridID' in AOI_gridcell_file:
+    user_option = None
+    if 'gridid' in AOI_gridcell_file.lower() or AOI_gridcell_file.endswith('_gridID.nc') or AOI_gridcell_file.endswith('_gridIDs.nc'):
         user_option = 1
-    if AOI_gridcell_file.endswith('xcyc.csv'):
+    elif AOI_gridcell_file.endswith('xcyc.csv'):
         user_option = 2
-    if AOI_gridcell_file.endswith('xcyc_lcc.csv'):
+    elif AOI_gridcell_file.endswith('xcyc_lcc.csv'):
         user_option = 3
+    if user_option is None:
+        raise ValueError(
+            f"Unrecognized AOI points file: {AOI_gridcell_file}. "
+            "Expected path containing 'gridID' (or .nc ending in _gridID.nc / _gridIDs.nc), or ending in xcyc.csv / xcyc_lcc.csv."
+        )
 
     # save to the 1D domain file
     AOIdomain = output_path +'/'+str(AOI)+'_domain.lnd.TES_SE.4km.1d.c'+ formatted_date + '.nc'
@@ -76,7 +82,9 @@ def main():
     if os.path.exists(AOIdomain):
         os.remove(AOIdomain)
 
-    source_file = './domain.lnd.TES_SE.4km.1d.nc'
+    # Use BASE_DOMAIN_FILE from environment when provided (set by run_domain_surfdata.sh
+    # from the JSON config). Fallback to the historical TES_SE filename otherwise.
+    source_file = os.environ.get('BASE_DOMAIN_FILE', './domain.lnd.TES_SE.4km.1d.nc')
     dst = nc.Dataset(AOIdomain, 'w', format='NETCDF3_64BIT')
 
     # open the 1D domain data
@@ -90,21 +98,30 @@ def main():
         if AOI_gridcell_file.endswith('.csv'):
             df = pd.read_csv(AOI_gridcell_file, sep=",", skiprows=1, names = ['gridID'])
             #read gridIds
-       	    AOI_points = list(df['gridID'])
+            AOI_points = list(df['gridID'])
         if AOI_gridcell_file.endswith('.nc'):
             grid_src= nc.Dataset(AOI_gridcell_file, 'r', format='NETCDF3_64BIT')
             #read gridIds
             AOI_points = list(grid_src['gridID'][0][:])
 
-        # read gridIDs
-        TES_gridIDs = src.variables['gridID'][:]
-        TES_gridcell_list = list(TES_gridIDs)
-        print(TES_gridcell_list[0:5])
+        # read gridIDs from full TES domain and flatten to 1D
+        TES_gridIDs = src.variables['gridID'][:]        # shape (nj, ni)
+        TES_grid1d = np.asarray(TES_gridIDs).ravel()    # shape (nj*ni,)
+        print("TES_grid1d[0:5] =", TES_grid1d[0:5])
 
-        domain_idx = np.where(np.in1d(TES_gridcell_list, AOI_points))[0]
+        AOI_points_arr = np.asarray(AOI_points, dtype=TES_grid1d.dtype)
 
-        TES_gridcell_arr = np.array(TES_gridIDs)
-        AOI_points_arr = np.array(AOI_points)
+        # Boolean mask over flattened TES grid; then take indices where True
+        mask = np.isin(TES_grid1d, AOI_points_arr)
+        domain_idx = np.nonzero(mask)[0]
+
+        if domain_idx.size == 0:
+            raise RuntimeError(
+                "No TES grid cells matched AOI gridIDs; "
+                "check that AOI_points refer to the same domain gridID numbering."
+            )
+
+        TES_gridcell_arr = TES_grid1d
 
     if user_option == 2: # use lat lon coordinates
         #AOI_gridcell_file = AOI+'_xcyc.csv'  # user provided gridcell csv file  (xc, yc) (lon, lat)

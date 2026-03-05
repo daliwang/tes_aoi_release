@@ -24,7 +24,7 @@ def AOI_forcing_save_1d(input_path, file, AOI, AOI_points, output_path):
     grid_ids = src['gridID'][...]    # gridID for all TES
  
     #  
-    AOI_idx = np.where(np.in1d(grid_ids, AOI_points))[0]
+    AOI_idx = np.where(np.isin(grid_ids, AOI_points))[0]
     
     AOI_mask = np.isin(grid_ids, AOI_points)
     #print(grid_ids.shape,AOI_points.shape, AOI_mask.shape)

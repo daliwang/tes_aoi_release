@@ -1,0 +1,13 @@
+cd /gpfs/wolf2/cades/cli185/proj-shared/wangd/uELM_TES_experiment
+
+python select_random_gridids.py \
+  --domain /gpfs/wolf2/cades/cli185/proj-shared/wangd/kiloCraft/TES_cases_data/Daymet_ERA5_TESSFA_NORTH/entire_domain/domain_surfdata/NORTHERA5_domain.lnd.TES_NORTHERA5.4km.1d.c251009.nc \
+  --percent 10 \
+  --case-name TESNorthERA510PCT \
+  --out TESNorthERA510PCTgridID.nc
+
+  cd /gpfs/wolf2/cades/cli185/proj-shared/wangd/uELM_TES_experiment
+
+python3 aoi_prepare_experiment.py \
+  --config /gpfs/wolf2/cades/cli185/proj-shared/wangd/uELM_TES_experiment/aoi_TESNorthERA510PCT_config.json
+
