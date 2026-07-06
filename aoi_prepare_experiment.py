@@ -9,6 +9,7 @@ import sys
 import subprocess
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 
 def ensure_dir(path: Path) -> None:
@@ -108,7 +109,7 @@ _PATH_KEYS_ABSOLUTIZE = {
 }
 
 
-def _absolutize_if_needed(key: str | None, value: str, base_dir: Path) -> str:
+def _absolutize_if_needed(key: Optional[str], value: str, base_dir: Path) -> str:
     if os.path.isabs(value):
         return value
     key_lower = (key or "").lower()
@@ -118,7 +119,7 @@ def _absolutize_if_needed(key: str | None, value: str, base_dir: Path) -> str:
     return value
 
 
-def _resolve_structure(obj, repo_root: Path, base_dir: Path, key: str | None = None):
+def _resolve_structure(obj, repo_root: Path, base_dir: Path, key: Optional[str] = None):
     if isinstance(obj, dict):
         return {k: _resolve_structure(v, repo_root, base_dir, k) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -198,6 +199,7 @@ def render_run_forcing_sbatch(cfg: dict, scripts_dir: Path, exp_root: Path) -> s
     time_limit = scheduler.get("time", "2:00:00")
     mem = scheduler.get("mem", "128GB")
     bootstrap_lines = scheduler.get("bootstrap", [])
+    _, _, tes_data_group_id = _derive_template_vars_from_cfg(cfg)
 
 
     lines = []
@@ -231,12 +233,13 @@ def render_run_forcing_sbatch(cfg: dict, scripts_dir: Path, exp_root: Path) -> s
     lines.append("date_string=$(date +'%y%m%d-%H%M')")
     lines.append(f": \"${{EXPID:={expid}}}\"")
     lines.append(f": \"${{FORCING_DIR:={forcing_dir}}}\"")
+    lines.append(f": \"${{TES_DATA_GROUP_ID:={tes_data_group_id}}}\"")
     lines.append("OUT_DIR=\"${EXP_ROOT}/forcing\"")
     lines.append("mkdir -p \"${OUT_DIR}\"")
     lines.append("")
     lines.append("# Locate the latest AOI domain to derive gridIDs")
     lines.append("AOI_FILE_PATH=\"${EXP_ROOT}/domain_surfdata\"")
-    lines.append("AOI_POINTS_FILE=$(ls -1 ${AOI_FILE_PATH}/*_domain.lnd.TES_SE.4km.1d.c*.nc 2>/dev/null | sort | tail -n1 | xargs -r basename)")
+    lines.append("AOI_POINTS_FILE=$(ls -1 ${AOI_FILE_PATH}/*_domain.lnd.${TES_DATA_GROUP_ID}.4km.1d.c*.nc 2>/dev/null | sort | tail -n1 | xargs -r basename)")
     lines.append("if [ -z \"${AOI_POINTS_FILE}\" ]; then echo 'ERROR: AOI domain file not found'; exit 2; fi")
     lines.append("")
     lines.append("# If not running inside a Slurm allocation, run with srun using env SCHED_* overrides")
@@ -322,11 +325,7 @@ def render_create_uelm_adspin_sh(cfg: dict, exp_root: Path) -> str:
     lines.append("")
     # Environment-style variable definitions (template-style)
     lines.append(f'KILOCRAFT_ROOT="{kilocraft_root}"')
-    lines.append('KMELM_ROOT="/gpfs/wolf2/cades/cli185/proj-shared/wangd/kmELM/"')
-    lines.append('KMELM_CASE_ROOT="${KMELM_ROOT}/e3sm_cases/"')
-    lines.append('KMELM_RUN_ROOT="${KMELM_ROOT}/e3sm_runs/"')
-    lines.append('E3SM_SRC_ROOT="${KMELM_ROOT}/E3SM/"')
-    lines.append(f'E3SM_DIN="{din_root}"')
+    lines.extend(_e3sm_env_block_lines(cfg))
     lines.append("")
     lines.append('TES_DATA_ROOT="$KILOCRAFT_ROOT/TES_cases_data/"')
     if tes_domain_forcing_group_id:
@@ -406,10 +405,7 @@ def render_create_uelm_adspin_sh(cfg: dict, exp_root: Path) -> str:
     lines.append("./case.setup --reset")
     lines.append("./case.setup")
     lines.append("")
-    lines.append("./case.build --clean-all")
-    lines.append("./case.build")
-    lines.append("")
-    # lines.append("./case.submit")  # left to the user
+    _append_case_build_tail(lines, mach)
     return "\n".join(lines) + "\n"
 
 
@@ -460,6 +456,38 @@ def _derive_template_vars_from_cfg(cfg: dict) -> tuple[str, str, str]:
     return kilocraft_root, tes_domain_forcing_group_id, tes_data_group_id
 
 
+def _e3sm_env_block_lines(cfg: dict) -> list[str]:
+    e3sm = cfg.get("e3sm", {})
+    kmelm_root = e3sm.get("src_root", "/projects/hpcl-cli185/proj-shared/wangd/kmELM").rstrip("/") + "/"
+    din_root = e3sm.get("din_root", "/projects/hpcl-cli185/world-shared/e3sm").rstrip("/")
+    return [
+        f'KMELM_ROOT="{kmelm_root}"',
+        'KMELM_CASE_ROOT="${KMELM_ROOT}/e3sm_cases/"',
+        'KMELM_RUN_ROOT="${KMELM_ROOT}/e3sm_runs/"',
+        'E3SM_SRC_ROOT="${KMELM_ROOT}/E3SM/"',
+        f'E3SM_DIN="{din_root}"',
+    ]
+
+
+def _append_case_build_tail(lines: list[str], mach: str) -> None:
+    lines.append("./case.build --clean-all")
+    lines.append("./case.build")
+    lines.append("")
+    if mach == "pathfinder":
+        lines.append('./xmlchange --force JOB_QUEUE="batch_ccsi"')
+        lines.append("")
+
+
+_CO2_STREAM_SRC = (
+    "/projects/hpcl-cli185/proj-shared/zdr/e3sm_cases/"
+    "20260225_Southeast_hires_single_I20TRCNPRDCTCBC/user_datm.streams.txt.co2tseries.20tr"
+)
+_CO2_STREAM_ALT = (
+    "/projects/hpcl-cli185/proj-shared/zdr/e3sm_cases/"
+    "20260225_Southeast_hires_single_I20TRCNPRDCTCBC/uuser_datm.streams.txt.co2tseries.20tr"
+)
+
+
 def render_create_uelm_finalspin_sh(cfg: dict, exp_root: Path) -> str:
     expid = cfg["expid"]
     e3sm = cfg.get("e3sm", {})
@@ -483,11 +511,7 @@ def render_create_uelm_finalspin_sh(cfg: dict, exp_root: Path) -> str:
     lines.append("")
     # Environment-style variable definitions mirroring create_uELM_adspin.sh
     lines.append(f'KILOCRAFT_ROOT="{kilocraft_root}"')
-    lines.append('KMELM_ROOT="/gpfs/wolf2/cades/cli185/proj-shared/wangd/kmELM/"')
-    lines.append('KMELM_CASE_ROOT="${KMELM_ROOT}/e3sm_cases/"')
-    lines.append('KMELM_RUN_ROOT="${KMELM_ROOT}/e3sm_runs/"')
-    lines.append('E3SM_SRC_ROOT="${KMELM_ROOT}/E3SM/"')
-    lines.append(f'E3SM_DIN="{din_root}"')
+    lines.extend(_e3sm_env_block_lines(cfg))
     lines.append("")
     lines.append('TES_DATA_ROOT="$KILOCRAFT_ROOT/TES_cases_data/"')
     if tes_domain_forcing_group_id:
@@ -567,10 +591,7 @@ def render_create_uelm_finalspin_sh(cfg: dict, exp_root: Path) -> str:
     lines.append("./case.setup --reset")
     lines.append("./case.setup")
     lines.append("")
-    lines.append("./case.build --clean-all")
-    lines.append("./case.build")
-    lines.append("")
-    # lines.append("./case.submit")  # left to the user
+    _append_case_build_tail(lines, mach)
     return "\n".join(lines) + "\n"
 
 
@@ -594,11 +615,7 @@ def render_create_uelm_transient1_sh(cfg: dict, exp_root: Path) -> str:
     lines.append("set -e")
     lines.append("")
     lines.append(f'KILOCRAFT_ROOT="{kilocraft_root}"')
-    lines.append('KMELM_ROOT="/gpfs/wolf2/cades/cli185/proj-shared/wangd/kmELM/"')
-    lines.append('KMELM_CASE_ROOT="${KMELM_ROOT}/e3sm_cases/"')
-    lines.append('KMELM_RUN_ROOT="${KMELM_ROOT}/e3sm_runs/"')
-    lines.append('E3SM_SRC_ROOT="${KMELM_ROOT}/E3SM/"')
-    lines.append(f'E3SM_DIN="{din_root}"')
+    lines.extend(_e3sm_env_block_lines(cfg))
     lines.append("")
     lines.append('TES_DATA_ROOT="$KILOCRAFT_ROOT/TES_cases_data/"')
     if tes_domain_forcing_group_id:
@@ -616,7 +633,7 @@ def render_create_uelm_transient1_sh(cfg: dict, exp_root: Path) -> str:
     lines.append("")
     # CO2 stream file from external 20TR case (matches helene example)
     lines.append('# CO2 stream file for transient (20TR); copy into case dir (installed as user_datm.streams.txt.co2tseries.20tr)')
-    lines.append('CO2_STREAM_SRC="/gpfs/wolf2/cades/cli185/proj-shared/zdr/e3sm_cases/20260225_Southeast_hires_single_I20TRCNPRDCTCBC/uuser_datm.streams.txt.co2tseries.20tr"')
+    lines.append(f'CO2_STREAM_SRC="{_CO2_STREAM_SRC}"')
     lines.append("")
     # Discover latest domain/surfdata filenames
     lines.append("DOMAIN_FILE=$(ls -1 ${CASE_DATA}/domain_surfdata/${EXPID}_domain.lnd.${TES_DATA_GROUP_ID}.4km.1d.c*.nc 2>/dev/null | sort | tail -n1 | xargs -r basename)")
@@ -626,7 +643,7 @@ def render_create_uelm_transient1_sh(cfg: dict, exp_root: Path) -> str:
     lines.append("")
     lines.append('rm -rf "${CASEDIR}"')
     lines.append("")
-    lines.append('${E3SM_SRC_ROOT}/cime/scripts/create_newcase --case "${CASEDIR}" --mach cades-baseline --compiler gnu --mpilib openmpi --compset "${CASE_COMPSET}" --res ELM_USRDAT  --handle-preexisting-dirs r --srcroot "${E3SM_SRC_ROOT}"')
+    lines.append(f'${{E3SM_SRC_ROOT}}/cime/scripts/create_newcase --case "${{CASEDIR}}" --mach {mach} --compiler {compiler} --mpilib {mpilib} --compset "${{CASE_COMPSET}}" --res ELM_USRDAT  --handle-preexisting-dirs r --srcroot "${{E3SM_SRC_ROOT}}"')
     lines.append("")
     lines.append('cd "${CASEDIR}"')
     lines.append("")
@@ -661,7 +678,7 @@ def render_create_uelm_transient1_sh(cfg: dict, exp_root: Path) -> str:
     lines.append('if [ -f "${CO2_STREAM_SRC}" ]; then')
     lines.append('  cp "${CO2_STREAM_SRC}" "${CASEDIR}/user_datm.streams.txt.co2tseries.20tr"')
     lines.append("else")
-    lines.append('  ALT_CO2_SRC="/gpfs/wolf2/cades/cli185/proj-shared/zdr/e3sm_cases/20260225_Southeast_hires_single_I20TRCNPRDCTCBC/user_datm.streams.txt.co2tseries.20tr"')
+    lines.append(f'  ALT_CO2_SRC="{_CO2_STREAM_ALT}"')
     lines.append('  if [ -f "${ALT_CO2_SRC}" ]; then')
     lines.append('    cp "${ALT_CO2_SRC}" "${CASEDIR}/user_datm.streams.txt.co2tseries.20tr"')
     lines.append("  else")
@@ -670,7 +687,7 @@ def render_create_uelm_transient1_sh(cfg: dict, exp_root: Path) -> str:
     lines.append("fi")
     lines.append("")
     lines.append("cat >> user_nl_elm <<EOF")
-    lines.append("!finidat = '/gpfs/wolf2/cades/cli185/scratch/zdr/e3sm_run/20260225_Southeast_hires_single_I1850CNPRDCTCBC/run/20260225_Southeast_hires_single_I1850CNPRDCTCBC.elm.r.0401-01-01-00000.nc'")
+    lines.append("!finidat = '/projects/hpcl-cli185/scratch/zdr/e3sm_run/20260225_Southeast_hires_single_I1850CNPRDCTCBC/run/20260225_Southeast_hires_single_I1850CNPRDCTCBC.elm.r.0401-01-01-00000.nc'")
     lines.append(
         f"finidat = '${{KMELM_RUN_ROOT}}/uELM_${{EXPID}}_{base_compset}_finalspin/run/uELM_${{EXPID}}_{base_compset}_finalspin.elm.r.0801-01-01-00000.nc'"
     )
@@ -695,9 +712,7 @@ def render_create_uelm_transient1_sh(cfg: dict, exp_root: Path) -> str:
     lines.append("./case.setup --reset")
     lines.append("./case.setup")
     lines.append("")
-    lines.append("./case.build --clean-all")
-    lines.append("./case.build")
-    lines.append("")
+    _append_case_build_tail(lines, mach)
     return "\n".join(lines) + "\n"
 
 
@@ -720,11 +735,7 @@ def render_create_uelm_transient2_sh(cfg: dict, exp_root: Path) -> str:
     lines.append("set -e")
     lines.append("")
     lines.append(f'KILOCRAFT_ROOT="{kilocraft_root}"')
-    lines.append('KMELM_ROOT="/gpfs/wolf2/cades/cli185/proj-shared/wangd/kmELM/"')
-    lines.append('KMELM_CASE_ROOT="${KMELM_ROOT}/e3sm_cases/"')
-    lines.append('KMELM_RUN_ROOT="${KMELM_ROOT}/e3sm_runs/"')
-    lines.append('E3SM_SRC_ROOT="${KMELM_ROOT}/E3SM/"')
-    lines.append(f'E3SM_DIN="{din_root}/"')
+    lines.extend(_e3sm_env_block_lines(cfg))
     lines.append("")
     lines.append('TES_DATA_ROOT="$KILOCRAFT_ROOT/TES_cases_data/"')
     if tes_domain_forcing_group_id:
@@ -742,7 +753,7 @@ def render_create_uelm_transient2_sh(cfg: dict, exp_root: Path) -> str:
     lines.append("")
     # CO2 stream file from external 20TR case (matches helene example)
     lines.append('# CO2 stream file for transient (20TR); copy into case dir (installed as user_datm.streams.txt.co2tseries.20tr)')
-    lines.append('CO2_STREAM_SRC="/gpfs/wolf2/cades/cli185/proj-shared/zdr/e3sm_cases/20260225_Southeast_hires_single_I20TRCNPRDCTCBC/uuser_datm.streams.txt.co2tseries.20tr"')
+    lines.append(f'CO2_STREAM_SRC="{_CO2_STREAM_SRC}"')
     lines.append("")
     # Discover latest domain/surfdata filenames
     lines.append("DOMAIN_FILE=$(ls -1 ${CASE_DATA}/domain_surfdata/${EXPID}_domain.lnd.${TES_DATA_GROUP_ID}.4km.1d.c*.nc 2>/dev/null | sort | tail -n1 | xargs -r basename)")
@@ -752,7 +763,7 @@ def render_create_uelm_transient2_sh(cfg: dict, exp_root: Path) -> str:
     lines.append("")
     lines.append('rm -rf "${CASEDIR}"')
     lines.append("")
-    lines.append('${E3SM_SRC_ROOT}/cime/scripts/create_newcase --case "${CASEDIR}" --mach cades-baseline --compiler gnu --mpilib openmpi --compset "${CASE_COMPSET}" --res ELM_USRDAT  --handle-preexisting-dirs r --srcroot "${E3SM_SRC_ROOT}"')
+    lines.append(f'${{E3SM_SRC_ROOT}}/cime/scripts/create_newcase --case "${{CASEDIR}}" --mach {mach} --compiler {compiler} --mpilib {mpilib} --compset "${{CASE_COMPSET}}" --res ELM_USRDAT  --handle-preexisting-dirs r --srcroot "${{E3SM_SRC_ROOT}}"')
     lines.append("")
     lines.append('cd "${CASEDIR}"')
     lines.append("")
@@ -787,7 +798,7 @@ def render_create_uelm_transient2_sh(cfg: dict, exp_root: Path) -> str:
     lines.append('if [ -f "${CO2_STREAM_SRC}" ]; then')
     lines.append('  cp "${CO2_STREAM_SRC}" "${CASEDIR}/user_datm.streams.txt.co2tseries.20tr"')
     lines.append("else")
-    lines.append('  ALT_CO2_SRC="/gpfs/wolf2/cades/cli185/proj-shared/zdr/e3sm_cases/20260225_Southeast_hires_single_I20TRCNPRDCTCBC/user_datm.streams.txt.co2tseries.20tr"')
+    lines.append(f'  ALT_CO2_SRC="{_CO2_STREAM_ALT}"')
     lines.append('  if [ -f "${ALT_CO2_SRC}" ]; then')
     lines.append('    cp "${ALT_CO2_SRC}" "${CASEDIR}/user_datm.streams.txt.co2tseries.20tr"')
     lines.append("  else")
@@ -796,7 +807,7 @@ def render_create_uelm_transient2_sh(cfg: dict, exp_root: Path) -> str:
     lines.append("fi")
     lines.append("")
     lines.append("cat >> user_nl_elm <<EOF")
-    lines.append("!finidat = '/gpfs/wolf2/cades/cli185/scratch/zdr/e3sm_run/20260225_Southeast_hires_single_I1850CNPRDCTCBC/run/20260225_Southeast_hires_single_I1850CNPRDCTCBC.elm.r.0401-01-01-00000.nc'")
+    lines.append("!finidat = '/projects/hpcl-cli185/scratch/zdr/e3sm_run/20260225_Southeast_hires_single_I1850CNPRDCTCBC/run/20260225_Southeast_hires_single_I1850CNPRDCTCBC.elm.r.0401-01-01-00000.nc'")
     lines.append("finidat = '${KMELM_RUN_ROOT}/uELM_${EXPID}_${CASE_COMPSET}_transient1/run/uELM_${EXPID}_${CASE_COMPSET}_transient1.elm.r.2000-01-01-00000.nc'")
     lines.append("fsurdat = '${CASE_DATA}/domain_surfdata/${SURFDATA_FILE}'")
     lines.append("do_budgets = .false.")
@@ -819,9 +830,7 @@ def render_create_uelm_transient2_sh(cfg: dict, exp_root: Path) -> str:
     lines.append("./case.setup --reset")
     lines.append("./case.setup")
     lines.append("")
-    lines.append("./case.build --clean-all")
-    lines.append("./case.build")
-    lines.append("")
+    _append_case_build_tail(lines, mach)
     return "\n".join(lines) + "\n"
 
 

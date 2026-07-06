@@ -19,14 +19,20 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--percent",
-        required=True,
+        required=False,
         type=float,
-        help="Percentage of gridcells to sample. If <1, treated as a fraction; otherwise treated as percent in [0,100].",
+        help="Percentage of gridcells to sample. If <1, treated as a fraction; otherwise treated as percent in [0,100]. Mutually exclusive with --count.",
+    )
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=None,
+        help="Select exactly this many gridcells. Mutually exclusive with --percent.",
     )
     parser.add_argument(
         "--case-name",
         required=True,
-        help="Case name prefix to use when constructing the default output name <caseName><percent>pct_gridID.nc (ignored if --out is provided).",
+        help="Case name prefix for default output names: <caseName><percent>pct_gridID.nc or <caseName><count>site_gridID.nc (ignored if --out is provided).",
     )
     parser.add_argument(
         "--out",
@@ -46,7 +52,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--like",
-        default="/gpfs/wolf2/cades/cli185/proj-shared/wangd/kiloCraft/uELM_TES_experiment/TNdemo_gridID.nc",
+        default="/projects/hpcl-cli185/proj-shared/wangd/uELM_TES_experiment/TESNorthERA510PCT_gridID.nc",
         help="Optional NetCDF file whose variable/global attributes to emulate (defaults to TNdemo_gridID.nc).",
     )
     parser.add_argument(
@@ -66,9 +72,23 @@ def _format_percent_token(percent: float) -> str:
     return f"{pct_rounded}pct"
 
 
-def _derive_output_path(case_name: str, percent: float, output_dir: str) -> str:
-    token = _format_percent_token(percent)
-    base = f"{case_name}{token}_gridID.nc"
+def _derive_count_basename(case_name: str, count: int) -> str:
+    """
+    Build a case basename for count-based selection, e.g. TESNorthERA + 5 -> TESNorthERA5site.
+    If case_name already ends with the count digits, append only 'site' to avoid names like TESNorthERA55site.
+    """
+    count_str = str(count)
+    if case_name.endswith(count_str):
+        return f"{case_name}site"
+    return f"{case_name}{count}site"
+
+
+def _derive_output_path(case_name: str, percent: Optional[float], count: Optional[int], output_dir: str) -> str:
+    if count is not None:
+        base = f"{_derive_count_basename(case_name, count)}_gridID.nc"
+    else:
+        token = _format_percent_token(percent)
+        base = f"{case_name}{token}_gridID.nc"
     return os.path.join(output_dir or ".", base)
 
 
@@ -174,9 +194,17 @@ def write_output(
 def main() -> None:
     args = parse_args()
 
+    if (args.percent is None) == (args.count is None):
+        raise SystemExit("Specify exactly one of --percent or --count.")
+
     grid_ids, domain_var_attrs, _ = read_gridids(args.domain)
     total = grid_ids.shape[0]
-    num_select = compute_sample_size(total, args.percent)
+    if args.count is not None:
+        if args.count <= 0:
+            raise SystemExit("--count must be positive.")
+        num_select = min(args.count, total)
+    else:
+        num_select = compute_sample_size(total, args.percent)
     indices = select_indices(total, num_select, args.seed)
     selected = grid_ids[indices]
 
@@ -185,12 +213,19 @@ def main() -> None:
 
     like_var_attrs, like_global_attrs = read_like_attrs(args.like)
 
-    out_path = args.out if args.out else _derive_output_path(args.case_name, args.percent, args.output_dir)
-
-    title_annotation = (
-        f"Random selection of {num_select}/{total} gridIDs "
-        f"({(num_select/total)*100:.3f}%) from {os.path.basename(args.domain)}"
+    out_path = args.out if args.out else _derive_output_path(
+        args.case_name, args.percent, args.count, args.output_dir
     )
+
+    if args.count is not None:
+        title_annotation = (
+            f"Random selection of {num_select} gridIDs from {os.path.basename(args.domain)}"
+        )
+    else:
+        title_annotation = (
+            f"Random selection of {num_select}/{total} gridIDs "
+            f"({(num_select/total)*100:.3f}%) from {os.path.basename(args.domain)}"
+        )
     write_output(
         out_path=out_path,
         selected_grid_ids=selected,
