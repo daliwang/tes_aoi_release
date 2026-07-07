@@ -5,8 +5,8 @@
 #SBATCH -c 1
 #SBATCH -t 12:00:00
 #SBATCH --mem=400G
-#SBATCH -p hpcl-cli185
-#SBATCH -q hpcl-cli185
+#SBATCH -p parallel
+#SBATCH -q normal
 
 set -euo pipefail
 

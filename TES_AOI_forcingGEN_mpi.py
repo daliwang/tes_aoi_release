@@ -93,8 +93,8 @@ def AOI_forcing_save_1d(input_path, file, AOI, AOI_points, output_path, chunk_si
 
                     print(f"Subsetting source data for chunk {chunk + 1} of {num_chunks}")
                     for i in range(start, end):
-                        AOI_data = np.copy(source_data[i - start, AOI_mask])
-                        data_arr[i, :, :] = AOI_data[:]
+                        # Direct assignment without np.copy() - same logic, faster execution
+                        data_arr[i, :, :] = source_data[i - start, AOI_mask]
 
                 print("Putting back data into netcdf")
                 dst[name][...] = data_arr

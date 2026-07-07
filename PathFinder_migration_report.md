@@ -219,18 +219,20 @@ To reduce the impact of the slow NFS-backed project filesystem, the TESNorthERA5
 
 ### 10.1 Script changes
 
-- Updated [TES_AOI_forcingGEN_mpi.py](TES_AOI_forcingGEN_mpi.py) to make the 3D subsetting chunk size configurable and default it to 32.
+- Updated [TES_AOI_forcingGEN_mpi.py](TES_AOI_forcingGEN_mpi.py) to make the 3D subsetting chunk size configurable and default it to 32 (instead of hard-coded 16).
 - Added a wrapper script at [TESNorthERA5site/scripts/run_forcinggen_scratch.sh](TESNorthERA5site/scripts/run_forcinggen_scratch.sh) that:
+  - creates a timestamped subdirectory on scratch for each run (`run_YYYYMMDD_HHMMSS/`),
   - runs the forcing generator from the scratch area,
   - creates the three expected forcing subfolders (`TPHWL3Hrly`, `Precip3Hrly`, `Solar3Hrly`),
-  - copies generated files back into the project output tree after completion.
-- Added a Slurm batch launcher at [TESNorthERA5site/scripts/run_forcinggen_scratch.batch.sh](TESNorthERA5site/scripts/run_forcinggen_scratch.batch.sh) for submission through `sbatch`.
+  - (optionally) copies generated files back into the project output tree after completion.
+- Added a Slurm batch launcher at [TESNorthERA5site/scripts/run_forcinggen_scratch.batch.sh](TESNorthERA5site/scripts/run_forcinggen_scratch.batch.sh) for submission through `sbatch` to the parallel partition.
 
 ### 10.2 Operational notes
 
 - The scratch-based workflow was necessary because writes to the project filesystem were much slower and were causing the forcing generation to appear stalled or incomplete.
-- The larger chunk size reduced the number of small subsetting loops and improved throughput, although the overall run remains slower than ideal because the workflow still does many NetCDF read/write operations.
-- The current implementation is functional, but further performance gains may require additional optimization in the Python subsetting loop or a larger Slurm allocation.
+- The larger chunk size (32 instead of 16) reduces the number of outer subsetting loops and modestly improves throughput.
+- The parallel partition provides better node availability than the hpcl-cli185 partition for this workload.
+- The current implementation is functional; performance gains from vectorization require careful consideration of data integrity.
 
 ---
 
