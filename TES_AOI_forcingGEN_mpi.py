@@ -33,8 +33,10 @@ except Exception:
 current_date = datetime.now()
 formatted_date = current_date.strftime('%y%m%d')
 
+DEFAULT_CHUNK_SIZE = 32
 
-def AOI_forcing_save_1d(input_path, file, AOI, AOI_points, output_path):
+
+def AOI_forcing_save_1d(input_path, file, AOI, AOI_points, output_path, chunk_size=DEFAULT_CHUNK_SIZE):
     os.makedirs(output_path, exist_ok=True)
 
     source_file = input_path + '/' + file
@@ -80,7 +82,6 @@ def AOI_forcing_save_1d(input_path, file, AOI, AOI_points, output_path):
 
             elif len(variable.dimensions) == 3:
                 d0, d1, d2 = variable.shape
-                chunk_size = 16
                 num_chunks = d0 // chunk_size + (d0 % chunk_size > 0)
                 data_arr = np.empty((d0, d1, AOI_points.shape[1]))
 
@@ -130,12 +131,13 @@ def _load_aoi_points(aoi_path, aoi_file):
 
 def main():
     args = sys.argv[1:]
-    if len(sys.argv) != 5 or sys.argv[1] == '--help':
-        print("Example use: python TES_AOI_forcingGEN_mpi.py <input_path> <output_path> <AOI_gridID_path> <AOI_points_file>")
+    if len(sys.argv) < 5 or sys.argv[1] == '--help':
+        print("Example use: python TES_AOI_forcingGEN_mpi.py <input_path> <output_path> <AOI_gridID_path> <AOI_points_file> [chunk_size]")
         print(" <input_path>: path to the 1D source data directory")
         print(" <output_path>: path for the 1D AOI forcing data directory")
         print(" <AOI_gridID_path>: path to the AOI gridIDs (csv or domain.nc)")
         print(" <AOI_points_file>: <AOI>_gridID.csv or <AOI>_domain.nc")
+        print(" [chunk_size]: optional chunk size for 3D variable subsetting (default: 32)")
         sys.exit(0)
 
     input_path = args[0]
@@ -145,6 +147,7 @@ def main():
     aoi_path = args[2]
     if not aoi_path.endswith("/"): aoi_path += '/'
     aoi_file = args[3]
+    chunk_size = int(args[4]) if len(args) > 4 else DEFAULT_CHUNK_SIZE
     AOI = aoi_file.split('_')[0]
 
     AOI_points = _load_aoi_points(aoi_path, aoi_file)
@@ -166,7 +169,7 @@ def main():
             period = parts[5] if len(parts) > 5 else ''
             print(f"[rank {RANK}/{SIZE}] processing {var_name} ({period}) in {file}")
             start = process_time()
-            AOI_forcing_save_1d(root, file, AOI, AOI_points, new_dir)
+            AOI_forcing_save_1d(root, file, AOI, AOI_points, new_dir, chunk_size=chunk_size)
             end = process_time()
             print(f"[rank {RANK}] Done {file} in {end-start:.2f}s")
         end_total = process_time()
@@ -184,7 +187,7 @@ def main():
                 period = parts[5] if len(parts) > 5 else ''
                 print('processing ' + var_name + '(' + period + ') in the file ' + file)
                 start = process_time()
-                AOI_forcing_save_1d(root, file, AOI, AOI_points, new_dir)
+                AOI_forcing_save_1d(root, file, AOI, AOI_points, new_dir, chunk_size=chunk_size)
                 end = process_time()
                 print("Generating 1D forcing data for " + AOI + " domain takes {}".format(end-start))
         else:
@@ -192,7 +195,7 @@ def main():
                 futures = []
                 for root, file, new_dir in tasks:
                     os.makedirs(new_dir, exist_ok=True)
-                    futures.append(executor.submit(AOI_forcing_save_1d, root, file, AOI, AOI_points, new_dir))
+                    futures.append(executor.submit(AOI_forcing_save_1d, root, file, AOI, AOI_points, new_dir, chunk_size))
                 for fut in as_completed(futures):
                     fut.result()
 

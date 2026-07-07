@@ -10,6 +10,21 @@ import sys, os
 
 from datetime import datetime
 
+import re
+
+
+def _tes_data_group_id() -> str:
+    """Resolve TES domain group tag from env or BASE_DOMAIN_FILE (e.g. TES_NORTHERA5)."""
+    group = os.environ.get("TES_DATA_GROUP_ID", "").strip()
+    if group:
+        return group
+    base_domain = os.environ.get("BASE_DOMAIN_FILE", "")
+    match = re.search(r"domain\.lnd\.([^.]+)\.4km", os.path.basename(base_domain))
+    if match:
+        return match.group(1)
+    return "TES_SE"
+
+
 # Get current date
 current_date = datetime.now()
 # Format date to mmddyyyy
@@ -43,7 +58,7 @@ def main():
         print(" <input_path>: path to the AOI_points_file")
         print(" <output_path>:  path for the 1D AOI output data directory")
         print(" <AOI_points_file>:  <AOI>_gridID.nc (or.csv) or <AOI>_xcyc.csv or <AOI>_xcyc_lcc.csv")
-        print(" The code uses a TES 1D domain (from BASE_DOMAIN_FILE env if set, otherwise ./domain.lnd.TES_SE.4km.1d.c<yymmdd>.nc) to generate 1D AOI domain.nc")
+        print(" The code uses a TES 1D domain (from BASE_DOMAIN_FILE / TES_DATA_GROUP_ID env) to generate 1D AOI domain.nc")
         exit(0)
     
     input_path = args[0]
@@ -75,16 +90,18 @@ def main():
             "Expected path containing 'gridID' (or .nc ending in _gridID.nc / _gridIDs.nc), or ending in xcyc.csv / xcyc_lcc.csv."
         )
 
+    tes_group = _tes_data_group_id()
+
     # save to the 1D domain file
-    AOIdomain = output_path +'/'+str(AOI)+'_domain.lnd.TES_SE.4km.1d.c'+ formatted_date + '.nc'
+    AOIdomain = output_path +'/'+str(AOI)+f'_domain.lnd.{tes_group}.4km.1d.c'+ formatted_date + '.nc'
 
     # check if file exists then delete it
     if os.path.exists(AOIdomain):
         os.remove(AOIdomain)
 
     # Use BASE_DOMAIN_FILE from environment when provided (set by run_domain_surfdata.sh
-    # from the JSON config). Fallback to the historical TES_SE filename otherwise.
-    source_file = os.environ.get('BASE_DOMAIN_FILE', './domain.lnd.TES_SE.4km.1d.nc')
+    # from the JSON config). Fallback uses TES_DATA_GROUP_ID for the local symlink name.
+    source_file = os.environ.get('BASE_DOMAIN_FILE', f'./domain.lnd.{tes_group}.4km.1d.nc')
     dst = nc.Dataset(AOIdomain, 'w', format='NETCDF3_64BIT')
 
     # open the 1D domain data

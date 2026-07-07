@@ -1,10 +1,12 @@
 #!/bin/bash
-#SBATCH -A CLI185
 #SBATCH -J TES_TESNorthERA510PCT_forcingGEN
-#SBATCH -p batch_ccsi
+#SBATCH -p hpcl-cli185
+#SBATCH -q hpcl-cli185
 #SBATCH -N 1
+#SBATCH -n 4
+#SBATCH -c 1
 #SBATCH -t 12:00:00
-#SBATCH --mem=500GB
+#SBATCH --mem=400G
 
 set -euo pipefail
 
@@ -12,10 +14,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
 source /software/baseline/nsp/init/profile
-source /projects/hpcl-cli185/proj-shared/wangd/kiloCraft/python_test_env/activate_shared_env.sh
+: "${PYTHON_ENV:=${SHARED_CONDA_PREFIX:-$HOME/.conda/envs/tes_aoi}}"
+source /projects/hpcl-cli185/proj-shared/wangd/kiloCraft/python_test_env/activate_shared_env.sh "${PYTHON_ENV}"
 
 # Source exported environment if present
 if [ -f ./export_env.sh ]; then . ./export_env.sh; fi
+export PYTHONUNBUFFERED=1
+
+python3 -c "from mpi4py import MPI" 2>/dev/null || {
+  echo "ERROR: mpi4py not found in ${PYTHON_ENV:-tes_aoi}; install with: conda install -c conda-forge mpi4py"
+  exit 1
+}
 : "${EXP_ROOT:=$(cd "${SCRIPT_DIR}/.." && pwd)}"
 echo "EXP_ROOT: ${EXP_ROOT}"
 
@@ -31,18 +40,22 @@ AOI_FILE_PATH="${EXP_ROOT}/domain_surfdata"
 AOI_POINTS_FILE=$(ls -1 ${AOI_FILE_PATH}/*_domain.lnd.${TES_DATA_GROUP_ID}.4km.1d.c*.nc 2>/dev/null | sort | tail -n1 | xargs -r basename)
 if [ -z "${AOI_POINTS_FILE}" ]; then echo 'ERROR: AOI domain file not found'; exit 2; fi
 
-# If not running inside a Slurm allocation, run with srun using env SCHED_* overrides
+SRUN_QOS="${SCHED_QOS:-hpcl-cli185}"
+SRUN_PARTITION="${SCHED_PARTITION:-hpcl-cli185}"
+SRUN_NODES="${SCHED_NODES:-1}"
+SRUN_TIME="${SCHED_TIME:-12:00:00}"
+SRUN_MEM="${SCHED_MEM:-400G}"
+SRUN_NTASKS="${SCHED_TASKS:-4}"
+SRUN_CPUS_PER_TASK="${SCHED_CPUS_PER_TASK:-1}"
+
+SRUN_CMD=(srun --mpi=pmi2 -p "${SRUN_PARTITION}" -q "${SRUN_QOS}" -N "${SRUN_NODES}" -c "${SRUN_CPUS_PER_TASK}" -t "${SRUN_TIME}" --mem="${SRUN_MEM}" -n "${SRUN_NTASKS}" python3 -u TES_AOI_forcingGEN_mpi.py "${FORCING_DIR}" "${OUT_DIR}" "${AOI_FILE_PATH}/" "${AOI_POINTS_FILE}")
+
+# If not running inside a Slurm allocation, launch via srun on the login node
 if [ -z "${SLURM_JOB_ID:-}" ]; then
-  ACCOUNT="${SCHED_ACCOUNT:-CLI185}"
-  PARTITION="${SCHED_PARTITION:-batch_ccsi}"
-  NODES="${SCHED_NODES:-1}"
-  TIME="${SCHED_TIME:-12:00:00}"
-  MEM="${SCHED_MEM:-500GB}"
-  SRUN_NTASKS="${SCHED_TASKS:-2}"
-  echo "srun -A '${ACCOUNT}' -p '${PARTITION}' -N '${NODES}' -t '${TIME}' --mem='${MEM}' -n '${SRUN_NTASKS}' python3 TES_AOI_forcingGEN_mpi.py '${FORCING_DIR}' '${OUT_DIR}' '${AOI_FILE_PATH}/' '${AOI_POINTS_FILE}'" | tee "${OUT_DIR}/${EXPID}_forcinggen.cmd.${date_string}"
-  exec srun -A "${ACCOUNT}" -p "${PARTITION}" -N "${NODES}" -t "${TIME}" --mem="${MEM}" -n "${SRUN_NTASKS}" python3 TES_AOI_forcingGEN_mpi.py "${FORCING_DIR}" "${OUT_DIR}" "${AOI_FILE_PATH}/" "${AOI_POINTS_FILE}" 2>&1 | tee "${OUT_DIR}/${EXPID}_forcinggen.log.${date_string}"
+  echo "${SRUN_CMD[*]}" | tee "${OUT_DIR}/${EXPID}_forcinggen.cmd.${date_string}"
+  exec "${SRUN_CMD[@]}" 2>&1 | tee "${OUT_DIR}/${EXPID}_forcinggen.log.${date_string}"
 fi
 
 # Running under Slurm allocation
-echo "srun -n '${SCHED_TASKS}' python3 TES_AOI_forcingGEN_mpi.py '${FORCING_DIR}' '${OUT_DIR}' '${AOI_FILE_PATH}/' '${AOI_POINTS_FILE}'" | tee "${OUT_DIR}/${EXPID}_forcinggen.cmd.${date_string}"
-srun -n "${SCHED_TASKS:-2}" python3 TES_AOI_forcingGEN_mpi.py "${FORCING_DIR}" "${OUT_DIR}" "${AOI_FILE_PATH}/" "${AOI_POINTS_FILE}" 2>&1 | tee "${OUT_DIR}/${EXPID}_forcinggen.log.${date_string}"
+echo "${SRUN_CMD[*]}" | tee "${OUT_DIR}/${EXPID}_forcinggen.cmd.${date_string}"
+"${SRUN_CMD[@]}" 2>&1 | tee "${OUT_DIR}/${EXPID}_forcinggen.log.${date_string}"

@@ -5,7 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
 source /software/baseline/nsp/init/profile
-source /projects/hpcl-cli185/proj-shared/wangd/kiloCraft/python_test_env/activate_shared_env.sh
+: "${PYTHON_ENV:=${SHARED_CONDA_PREFIX:-$HOME/.conda/envs/tes_aoi}}"
+source /projects/hpcl-cli185/proj-shared/wangd/kiloCraft/python_test_env/activate_shared_env.sh "${PYTHON_ENV}"
 
 # Source exported environment if present
 if [ -f ./export_env.sh ]; then . ./export_env.sh; fi
@@ -19,6 +20,7 @@ date_string=$(date +'%y%m%d-%H%M')
 : "${BASE_DOMAIN_FILE:=/projects/hpcl-cli185/proj-shared/wangd/kiloCraft/TES_cases_data/Daymet_ERA5_TESSFA_NORTH/entire_domain/domain_surfdata/NORTHERA5_domain.lnd.TES_NORTHERA5.4km.1d.c251009.nc}"
 : "${SURFDATA_DIR:=/projects/hpcl-cli185/proj-shared/wangd/kiloCraft/TES_cases_data/Daymet_ERA5_TESSFA_NORTH/entire_domain/domain_surfdata}"
 : "${SURFDATA_FILE:=surfdata.TESSFA_DOMAIN1.4km.1d.NALCMS.c260218_yw.nc}"
+export TES_DATA_GROUP_ID BASE_DOMAIN_FILE SURFDATA_FILE
 DOM_SURF_DIR="${EXP_ROOT}/domain_surfdata"
 mkdir -p "${DOM_SURF_DIR}"
 

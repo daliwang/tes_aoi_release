@@ -1,13 +1,110 @@
-cd /gpfs/wolf2/cades/cli185/proj-shared/wangd/uELM_TES_experiment
+# =============================================================================
+# PathFinder Python environment (run once before AOI scripts)
+# See PathFinder_migration_report.md §6 for details.
+# =============================================================================
 
-python select_random_gridids.py \
-  --domain /gpfs/wolf2/cades/cli185/proj-shared/wangd/kiloCraft/TES_cases_data/Daymet_ERA5_TESSFA_NORTH/entire_domain/domain_surfdata/NORTHERA5_domain.lnd.TES_NORTHERA5.4km.1d.c251009.nc \
+module load miniforge3
+source "$(conda info --base)/etc/profile.d/conda.sh"
+
+# Create personal env (skip if tes_aoi already exists and imports OK)
+conda create -y -n tes_aoi -c conda-forge python=3.11 pyproj netcdf4 numpy pandas scipy
+conda activate tes_aoi
+python -c "import pyproj, netCDF4, numpy, pandas, scipy; print('OK')"
+
+# Use personal env for workflow scripts (until shared testvenv is rebuilt)
+source /projects/hpcl-cli185/proj-shared/wangd/kiloCraft/python_test_env/activate_shared_env.sh \
+  $HOME/.conda/envs/tes_aoi
+
+# Optional: clone into shared testvenv (requires write access; run while tes_aoi is active)
+# bash /projects/hpcl-cli185/proj-shared/wangd/kiloCraft/python_test_env/create_shared_env_from_existing.sh \
+#   /projects/hpcl-cli185/proj-shared/wangd/kiloCraft/python_test_env/conda_envs/testvenv
+
+
+
+REPO=/projects/hpcl-cli185/proj-shared/wangd/uELM_TES_experiment
+CASE_ROOT=${REPO}/TESNorthERA5site
+SCRIPTS=${CASE_ROOT}/scripts
+KMELM_CASES=/projects/hpcl-cli185/proj-shared/wangd/kmELM/e3sm_cases/Daymet_ERA5_TESSFA_NORTH
+
+# --- One-time setup (skip if gridID/config/scripts already exist) ---
+
+cd ${REPO}
+
+# 1) Create 5-site gridID file (seed=42 for reproducibility)
+python3 select_random_gridids.py \
+  --domain /projects/hpcl-cli185/proj-shared/wangd/kiloCraft/TES_cases_data/Daymet_ERA5_TESSFA_NORTH/entire_domain/domain_surfdata/NORTHERA5_domain.lnd.TES_NORTHERA5.4km.1d.c251009.nc \
+  --count 5 \
+  --case-name TESNorthERA \
+  --out TESNorthERA5site_gridID.nc \
+  --seed 42 \
+  --like TESNorthERA510PCT_gridID.nc
+
+# 2) Generate experiment scripts and directory layout
+python3 aoi_prepare_experiment.py \
+  --config ${REPO}/aoi_TESNorthERA5site_config.json
+
+
+# --- Continuous execution workflow (run in order) ---
+
+# 0) Environment (login node or before interactive/sbatch steps)
+source /software/baseline/nsp/init/profile
+source /projects/hpcl-cli185/proj-shared/wangd/kiloCraft/python_test_env/activate_shared_env.sh
+
+cd ${SCRIPTS}
+source ./export_env.sh
+
+# 3) Generate AOI domain and surfdata
+bash run_domain_surfdata.sh
+
+# 4) Generate AOI forcing (Slurm; ~minutes for 5 sites)
+sbatch run_forcing.sbatch
+# Or run directly without sbatch wrapper:
+# bash run_forcing.sbatch
+
+# 5) Create DATM-facing soft links
+bash create_links.sh
+
+# 6) Create and build E3SM cases (run after previous steps complete)
+bash create_uELM_adspin.sh
+bash create_uELM_finalspin.sh
+bash create_uELM_transient1.sh
+bash create_uELM_transient2.sh
+
+# 7) Submit runs (after each case is built; run phases in order)
+cd ${KMELM_CASES}/uELM_TESNorthERA5site_I1850CNPRDCTCBC
+./case.submit
+
+cd ${KMELM_CASES}/uELM_TESNorthERA5site_I1850CNPRDCTCBC_finalspin
+./case.submit
+
+cd ${KMELM_CASES}/uELM_TESNorthERA5site_I20TRCNPRDCTCBC_transient1
+./case.submit
+
+cd ${KMELM_CASES}/uELM_TESNorthERA5site_I20TRCNPRDCTCBC_transient2
+./case.submit
+
+
+# =============================================================================
+# TESNorthERA510PCT (PathFinder) - 10% random subdomain
+# =============================================================================
+
+cd ${REPO}
+
+python3 select_random_gridids.py \
+  --domain /projects/hpcl-cli185/proj-shared/wangd/kiloCraft/TES_cases_data/Daymet_ERA5_TESSFA_NORTH/entire_domain/domain_surfdata/NORTHERA5_domain.lnd.TES_NORTHERA5.4km.1d.c251009.nc \
   --percent 10 \
   --case-name TESNorthERA510PCT \
-  --out TESNorthERA510PCTgridID.nc
-
-  cd /gpfs/wolf2/cades/cli185/proj-shared/wangd/uELM_TES_experiment
+  --out TESNorthERA510PCT_gridID.nc
 
 python3 aoi_prepare_experiment.py \
-  --config /gpfs/wolf2/cades/cli185/proj-shared/wangd/uELM_TES_experiment/aoi_TESNorthERA510PCT_config.json
+  --config ${REPO}/aoi_TESNorthERA510PCT_config.json
 
+cd ${REPO}/TESNorthERA510PCT/scripts
+source ./export_env.sh
+bash run_domain_surfdata.sh
+sbatch run_forcing.sbatch
+bash create_links.sh
+bash create_uELM_adspin.sh
+bash create_uELM_finalspin.sh
+bash create_uELM_transient1.sh
+bash create_uELM_transient2.sh

@@ -1,13 +1,13 @@
 {
   "_comments": [
-    "TES North ERA5 10% random subdomain. Create TESNorthGridID10PCT.nc first with select_random_gridids.py.",
+    "TES North ERA5 5-site test subdomain. Create TESNorthERA5site_gridID.nc with select_random_gridids.py --count 5.",
     "expid is used in script outputs and case names."
   ],
-  "expid": "TESNorthERA510PCT",
-  "experiment_root": "./TESNorthERA510PCT",
+  "expid": "TESNorthERA5site",
+  "experiment_root": "./TESNorthERA5site",
   "aoi_points": {
     "dir": ".",
-    "file": "TESNorthERA510PCT_gridID.nc"
+    "file": "TESNorthERA5site_gridID.nc"
   },
   "source": {
     "tesdata_group_id": "TES_NORTHERA5",
@@ -26,8 +26,7 @@
     "tasks": 4,
     "cpus_per_task": 1,
     "bootstrap": [
-      "source /software/baseline/nsp/init/profile",
-      "source /projects/hpcl-cli185/proj-shared/wangd/kiloCraft/python_test_env/activate_shared_env.sh"
+      "source /software/baseline/nsp/init/profile"
     ]
   },
   "e3sm": {

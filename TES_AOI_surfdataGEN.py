@@ -10,6 +10,23 @@ import sys, os
 
 from datetime import datetime
 
+import re
+
+
+def _tes_data_group_id() -> str:
+    group = os.environ.get("TES_DATA_GROUP_ID", "").strip()
+    if group:
+        return group
+    base_domain = os.environ.get("BASE_DOMAIN_FILE", "")
+    match = re.search(r"domain\.lnd\.([^.]+)\.4km", os.path.basename(base_domain))
+    if match:
+        return match.group(1)
+    return "TES_SE"
+
+
+def _surfdata_landcover_tag() -> str:
+    return "NLCD"
+
 # Get current date
 current_date = datetime.now()
 # Format date to mmddyyyy
@@ -63,9 +80,12 @@ def main():
     else:
         print("Error: Invalid AOI_points_file, see help.")
 
+    tes_group = _tes_data_group_id()
+    landcover_tag = _surfdata_landcover_tag()
+
     # save to the 1D domain file
     
-    AOIsurfdata = output_path +'/'+str(AOI)+'_surfdata.TES_SE.4km.1d.NLCD.c'+ formatted_date +'.nc'
+    AOIsurfdata = output_path +'/'+str(AOI)+f'_surfdata.{tes_group}.4km.1d.{landcover_tag}.c'+ formatted_date +'.nc'
     print("AOIsurfdata:" + AOIsurfdata)
 
     # check if file exists then delete it
