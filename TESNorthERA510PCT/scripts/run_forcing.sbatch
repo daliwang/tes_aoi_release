@@ -8,12 +8,11 @@
 #SBATCH -t 12:00:00
 #SBATCH --mem=400G
 
+source /software/baseline/nsp/init/profile || true
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
-
-source /software/baseline/nsp/init/profile
 : "${PYTHON_ENV:=${SHARED_CONDA_PREFIX:-$HOME/.conda/envs/tes_aoi}}"
 source /projects/hpcl-cli185/proj-shared/wangd/kiloCraft/python_test_env/activate_shared_env.sh "${PYTHON_ENV}"
 

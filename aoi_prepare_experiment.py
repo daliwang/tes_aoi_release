@@ -222,6 +222,7 @@ def render_run_forcing_sbatch(cfg: dict, scripts_dir: Path, exp_root: Path) -> s
     lines.append(f"#SBATCH -t {time_limit}")
     lines.append(f"#SBATCH --mem={mem}")
     lines.append("")
+    lines.append("source /software/baseline/nsp/init/profile || true")
     lines.append("set -euo pipefail")
 
     lines.append("")
