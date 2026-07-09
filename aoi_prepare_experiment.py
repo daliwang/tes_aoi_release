@@ -193,7 +193,37 @@ def render_run_domain_surfdata_sh(cfg: dict, scripts_dir: Path, exp_root: Path) 
     return "\n".join(lines) + "\n"
 
 
-def render_run_forcing_sbatch(cfg: dict, scripts_dir: Path, exp_root: Path) -> str:
+def render_sync_forcing_to_project_sh(cfg: dict, exp_root: Path) -> str:
+    """Copy AOI forcing from scratch (fast I/O) into the case project tree."""
+    expid = cfg["expid"]
+    lines = []
+    lines.append("#!/bin/bash")
+    lines.append("set -euo pipefail")
+    lines.append('cd "$(dirname "$0")"')
+    lines.append("if [ -f ./export_env.sh ]; then . ./export_env.sh; fi")
+    lines.append(f'EXP_ROOT="{exp_root.as_posix()}"')
+    lines.append(f': "${{EXPID:={expid}}}"')
+    lines.append('PROJECT_FORCING_DIR="${EXP_ROOT}/forcing"')
+    lines.append(': "${FORCING_OUT_DIR:=}"')
+    lines.append('if [ -z "${FORCING_OUT_DIR}" ]; then')
+    lines.append('  SCRATCH_ROOT="${SCRATCH:-/scratch/hpcl-cli185/${USER}}"')
+    lines.append('  FORCING_OUT_DIR="${SCRATCH_ROOT}/${EXPID}/forcing"')
+    lines.append("fi")
+    lines.append('if [ ! -d "${FORCING_OUT_DIR}" ]; then')
+    lines.append('  echo "ERROR: scratch forcing dir not found: ${FORCING_OUT_DIR}"; exit 2')
+    lines.append("fi")
+    lines.append('echo "Syncing forcing from ${FORCING_OUT_DIR} -> ${PROJECT_FORCING_DIR}"')
+    lines.append("for subdir in TPHWL3Hrly Precip3Hrly Solar3Hrly; do")
+    lines.append('  if [ -d "${FORCING_OUT_DIR}/${subdir}" ]; then')
+    lines.append('    mkdir -p "${PROJECT_FORCING_DIR}/${subdir}"')
+    lines.append('    cp -a "${FORCING_OUT_DIR}/${subdir}/." "${PROJECT_FORCING_DIR}/${subdir}/"')
+    lines.append("  fi")
+    lines.append("done")
+    lines.append('echo "Forcing sync complete: ${PROJECT_FORCING_DIR}"')
+    return "\n".join(lines) + "\n"
+
+
+def render_run_forcing_sbatch(cfg: dict, scripts_dir: Path, exp_root: Path, repo_root: Path) -> str:
     expid = cfg["expid"]
     forcing_dir = cfg["source"]["forcing_dir"].rstrip("/")
     scheduler = cfg.get("scheduler", {})
@@ -226,10 +256,14 @@ def render_run_forcing_sbatch(cfg: dict, scripts_dir: Path, exp_root: Path) -> s
     lines.append("set -euo pipefail")
 
     lines.append("")
-    # Optional environment bootstrap lines (e.g., source profile, activate env)
+    # Optional environment bootstrap lines (e.g., activate env); skip duplicate profile source
+    profile_cmd = "source /software/baseline/nsp/init/profile"
     if isinstance(bootstrap_lines, list) and bootstrap_lines:
         for cmd in bootstrap_lines:
-            lines.append(str(cmd))
+            cmd_str = str(cmd).strip()
+            if cmd_str.replace(" || true", "").rstrip(";") == profile_cmd:
+                continue
+            lines.append(cmd_str)
         lines.append("")
     lines.append(': "${PYTHON_ENV:=${SHARED_CONDA_PREFIX:-$HOME/.conda/envs/tes_aoi}}"')
     lines.append('source /projects/hpcl-cli185/proj-shared/wangd/kiloCraft/python_test_env/activate_shared_env.sh "${PYTHON_ENV}"')
@@ -246,6 +280,7 @@ def render_run_forcing_sbatch(cfg: dict, scripts_dir: Path, exp_root: Path) -> s
     # Set absolute paths from config/exp_root to work on compute nodes
     lines.append(f'EXP_ROOT="{exp_root.as_posix()}"')
     lines.append(f'SCRIPT_DIR="{(exp_root / "scripts").as_posix()}"')
+    lines.append('REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"')
     lines.append('echo "EXP_ROOT: ${EXP_ROOT}"')
     lines.append('cd "${SCRIPT_DIR}"')
 
@@ -254,8 +289,19 @@ def render_run_forcing_sbatch(cfg: dict, scripts_dir: Path, exp_root: Path) -> s
     lines.append(f": \"${{EXPID:={expid}}}\"")
     lines.append(f": \"${{FORCING_DIR:={forcing_dir}}}\"")
     lines.append(f": \"${{TES_DATA_GROUP_ID:={tes_data_group_id}}}\"")
-    lines.append("OUT_DIR=\"${EXP_ROOT}/forcing\"")
-    lines.append("mkdir -p \"${OUT_DIR}\"")
+    lines.append(': "${FORCING_OUT_DIR:=}"')
+    lines.append('if [ -z "${FORCING_OUT_DIR}" ]; then')
+    lines.append('  SCRATCH_ROOT="${SCRATCH:-/scratch/hpcl-cli185/${USER}}"')
+    lines.append('  FORCING_OUT_DIR="${SCRATCH_ROOT}/${EXPID}/forcing"')
+    lines.append("fi")
+    lines.append('OUT_DIR="${FORCING_OUT_DIR}"')
+    lines.append('PROJECT_FORCING_DIR="${EXP_ROOT}/forcing"')
+    lines.append('mkdir -p "${OUT_DIR}" "${PROJECT_FORCING_DIR}"')
+    lines.append('for subdir in TPHWL3Hrly Precip3Hrly Solar3Hrly; do')
+    lines.append('  mkdir -p "${OUT_DIR}/${subdir}" "${PROJECT_FORCING_DIR}/${subdir}"')
+    lines.append("done")
+    lines.append('echo "FORCING OUT_DIR (scratch): ${OUT_DIR}"')
+    lines.append('echo "PROJECT FORCING DIR: ${PROJECT_FORCING_DIR}"')
     lines.append("")
     lines.append("# Locate the latest AOI domain to derive gridIDs")
     lines.append("AOI_FILE_PATH=\"${EXP_ROOT}/domain_surfdata\"")
@@ -269,17 +315,24 @@ def render_run_forcing_sbatch(cfg: dict, scripts_dir: Path, exp_root: Path) -> s
     lines.append(f'SRUN_MEM="${{SCHED_MEM:-{mem}}}"')
     lines.append(f'SRUN_NTASKS="${{SCHED_TASKS:-{tasks}}}"')
     lines.append(f'SRUN_CPUS_PER_TASK="${{SCHED_CPUS_PER_TASK:-{cpus_per_task}}}"')
-    lines.append('SRUN_CMD=(srun --mpi=pmi2 -p "${SRUN_PARTITION}" -q "${SRUN_QOS}" -N "${SRUN_NODES}" -c "${SRUN_CPUS_PER_TASK}" -t "${SRUN_TIME}" --mem="${SRUN_MEM}" -n "${SRUN_NTASKS}" python3 -u TES_AOI_forcingGEN_mpi.py "${FORCING_DIR}" "${OUT_DIR}" "${AOI_FILE_PATH}/" "${AOI_POINTS_FILE}")')
+    lines.append(': "${FORCING_CHUNK_SIZE:=32}"')
+    lines.append('FORCING_GEN_SCRIPT="${FORCING_GEN_SCRIPT:-${REPO_ROOT}/TES_AOI_forcingGEN_mpi.py}"')
+    lines.append('if [ ! -f "${FORCING_GEN_SCRIPT}" ]; then')
+    lines.append('  FORCING_GEN_SCRIPT="${SCRIPT_DIR}/TES_AOI_forcingGEN_mpi.py"')
+    lines.append("fi")
+    lines.append('echo "FORCING GEN SCRIPT: ${FORCING_GEN_SCRIPT}"')
+    lines.append('SRUN_CMD=(srun --mpi=pmi2 -p "${SRUN_PARTITION}" -q "${SRUN_QOS}" -N "${SRUN_NODES}" -c "${SRUN_CPUS_PER_TASK}" -t "${SRUN_TIME}" --mem="${SRUN_MEM}" -n "${SRUN_NTASKS}" python3 -u "${FORCING_GEN_SCRIPT}" "${FORCING_DIR}" "${OUT_DIR}" "${AOI_FILE_PATH}/" "${AOI_POINTS_FILE}" "${FORCING_CHUNK_SIZE}")')
     lines.append("")
     lines.append("# If not running inside a Slurm allocation, launch via srun on the login node")
     lines.append("if [ -z \"${SLURM_JOB_ID:-}\" ]; then")
     lines.append('  echo "${SRUN_CMD[*]}" | tee "${OUT_DIR}/${EXPID}_forcinggen.cmd.${date_string}"')
-    lines.append('  exec "${SRUN_CMD[@]}" 2>&1 | tee "${OUT_DIR}/${EXPID}_forcinggen.log.${date_string}"')
+    lines.append('  "${SRUN_CMD[@]}" 2>&1 | tee "${OUT_DIR}/${EXPID}_forcinggen.log.${date_string}"')
+    lines.append("else")
+    lines.append('  echo "${SRUN_CMD[*]}" | tee "${OUT_DIR}/${EXPID}_forcinggen.cmd.${date_string}"')
+    lines.append('  "${SRUN_CMD[@]}" 2>&1 | tee "${OUT_DIR}/${EXPID}_forcinggen.log.${date_string}"')
     lines.append("fi")
     lines.append("")
-    lines.append("# Running under Slurm allocation")
-    lines.append('echo "${SRUN_CMD[*]}" | tee "${OUT_DIR}/${EXPID}_forcinggen.cmd.${date_string}"')
-    lines.append('"${SRUN_CMD[@]}" 2>&1 | tee "${OUT_DIR}/${EXPID}_forcinggen.log.${date_string}"')
+    lines.append('bash "${SCRIPT_DIR}/sync_forcing_to_project.sh"')
     return "\n".join(lines) + "\n"
 
 
@@ -292,7 +345,7 @@ def render_create_links_sh() -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_export_env_sh(cfg: dict, exp_root: Path) -> str:
+def render_export_env_sh(cfg: dict, exp_root: Path, repo_root: Path) -> str:
     expid = cfg["expid"]
     aoi_dir = cfg["aoi_points"]["dir"].rstrip("/")
     aoi_file = cfg["aoi_points"]["file"]
@@ -300,6 +353,7 @@ def render_export_env_sh(cfg: dict, exp_root: Path) -> str:
     surf_dir = cfg["source"]["surfdata_dir"].rstrip("/")
     surf_file = cfg["source"]["surfdata_file"]
     forcing_dir = cfg["source"]["forcing_dir"].rstrip("/")
+    forcing_chunk_size = cfg.get("forcing", {}).get("chunk_size", 32)
 
     # Derive TES data group id once for downstream scripts
     _, _, tes_data_group_id = _derive_template_vars_from_cfg(cfg)
@@ -318,12 +372,17 @@ def render_export_env_sh(cfg: dict, exp_root: Path) -> str:
     lines.append(f"export SURFDATA_DIR=\"{surf_dir}\"")
     lines.append(f"export SURFDATA_FILE=\"{surf_file}\"")
     lines.append(f"export FORCING_DIR=\"{forcing_dir}\"")
+    lines.append('export FORCING_OUT_DIR="${FORCING_OUT_DIR:-/scratch/hpcl-cli185/${USER}/' + expid + '/forcing}"')
+    lines.append(f'export FORCING_GEN_SCRIPT="${{FORCING_GEN_SCRIPT:-{repo_root.as_posix()}/TES_AOI_forcingGEN_mpi.py}}"')
+    lines.append(f"export FORCING_CHUNK_SIZE=\"${{FORCING_CHUNK_SIZE:-{forcing_chunk_size}}}\"")
     lines.append("export PYTHON_ENV=\"${PYTHON_ENV:-$HOME/.conda/envs/tes_aoi}\"")
     lines.append("export PYTHONUNBUFFERED=1")
     lines.append("")
     # Optional scheduler exports for external use
     if scheduler:
         for key, value in scheduler.items():
+            if key == "bootstrap" or isinstance(value, (list, dict)):
+                continue
             var = f"SCHED_{key.upper()}"
             lines.append(f"export {var}=\"{value}\"")
     return "\n".join(lines) + "\n"
@@ -952,15 +1011,19 @@ def main() -> None:
     write_text_file(user_scripts_dir / "run_domain_surfdata.sh", run_domain_surfdata)
     make_executable(user_scripts_dir / "run_domain_surfdata.sh")
 
-    run_forcing_sbatch = render_run_forcing_sbatch(cfg, user_scripts_dir, exp_root)
+    run_forcing_sbatch = render_run_forcing_sbatch(cfg, user_scripts_dir, exp_root, repo_root)
     write_text_file(user_scripts_dir / "run_forcing.sbatch", run_forcing_sbatch)
     make_executable(user_scripts_dir / "run_forcing.sbatch")
+
+    sync_forcing_sh = render_sync_forcing_to_project_sh(cfg, exp_root)
+    write_text_file(user_scripts_dir / "sync_forcing_to_project.sh", sync_forcing_sh)
+    make_executable(user_scripts_dir / "sync_forcing_to_project.sh")
 
     create_links_sh = render_create_links_sh()
     write_text_file(user_scripts_dir / "create_links.sh", create_links_sh)
     make_executable(user_scripts_dir / "create_links.sh")
 
-    export_env_sh = render_export_env_sh(cfg, exp_root)
+    export_env_sh = render_export_env_sh(cfg, exp_root, repo_root)
     write_text_file(user_scripts_dir / "export_env.sh", export_env_sh)
     make_executable(user_scripts_dir / "export_env.sh")
 

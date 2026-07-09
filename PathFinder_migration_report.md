@@ -206,46 +206,96 @@ During this work, `dev` was rebased locally. After rebase:
 | GridID file | Done | Done |
 | `aoi_prepare_experiment.py` | Done (manual script updates) | Done |
 | Domain/surfdata generation | Not re-run on PathFinder | Done |
-| Forcing generation | Not re-run on PathFinder | In progress / validated on scratch |
+| Forcing generation | Not re-run on PathFinder | Validated on scratch (MPI) |
 | `create_links.sh` | Pending | Pending |
-| `create_uELM_*.sh` | Pending | Pending |
+| `create_uELM_*.sh` | Pending | Done (scripts committed) |
 | `case.submit` | Pending | Pending |
 
 ---
 
-## 10. Forcing-generation adjustments on PathFinder
+## 10. MPI forcing generation (PathFinder, 2026-07-08)
 
-To reduce the impact of the slow NFS-backed project filesystem, the TESNorthERA5site forcing workflow was adapted to use the faster scratch filesystem at `/scratch/hpcl-cli185/7xw/TESNorthERA5site`.
+Validated TESNorthERA5site forcing generation on PathFinder exposed both a **correctness bug** and **I/O performance** limits on the project filesystem. Fixes were committed to the repo and then propagated into the case-preparation generator.
 
-### 10.1 Script changes
+### 10.1 Correctness and performance fix (`TES_AOI_forcingGEN_mpi.py`)
 
-- Updated [TES_AOI_forcingGEN_mpi.py](TES_AOI_forcingGEN_mpi.py) to make the 3D subsetting chunk size configurable and default it to 32 (instead of hard-coded 16).
-- Added a wrapper script at [TESNorthERA5site/scripts/run_forcinggen_scratch.sh](TESNorthERA5site/scripts/run_forcinggen_scratch.sh) that:
-  - creates a timestamped subdirectory on scratch for each run (`run_YYYYMMDD_HHMMSS/`),
-  - runs the forcing generator from the scratch area,
-  - creates the three expected forcing subfolders (`TPHWL3Hrly`, `Precip3Hrly`, `Solar3Hrly`),
-  - (optionally) copies generated files back into the project output tree after completion.
-- Added a Slurm batch launcher at [TESNorthERA5site/scripts/run_forcinggen_scratch.batch.sh](TESNorthERA5site/scripts/run_forcinggen_scratch.batch.sh) for submission through `sbatch` to the parallel partition.
+**Problem:** The previous 3D subsetting path used a boolean `AOI_mask` with a per-timestep loop. That could misalign time slices and grid columns in the output NetCDF files.
 
-### 10.2 Operational notes
+**Fix (commit `f25e820`):**
 
-- The scratch-based workflow was necessary because writes to the project filesystem were much slower and were causing the forcing generation to appear stalled or incomplete.
-- The larger chunk size (32 instead of 16) reduces the number of outer subsetting loops and modestly improves throughput.
-- The parallel partition provides better node availability than the hpcl-cli185 partition for this workload.
-- The current implementation is functional; performance gains from vectorization require careful consideration of data integrity.
+- Resolve AOI cells with integer indices: `AOI_idx = np.where(np.isin(flat_ids, aoi_pts))[0]`
+- Subset 3D variables as `src[name][start:end, :, AOI_idx]` and assign chunks in one shot
+- Subset 2D variables on the last axis: `src[name][..., AOI_idx]`
+- Use `aoi_pts.size` / `AOI_idx.size` for output dimensions
+- Configurable `chunk_size` (default **32**) passed as an optional 5th CLI argument
+- MPI launch on PathFinder via `srun --mpi=pmi2`
+
+Canonical script: [`TES_AOI_forcingGEN_mpi.py`](TES_AOI_forcingGEN_mpi.py) at repo root. A per-case copy is also kept under `TESNorthERA5site/scripts/` for reference.
+
+### 10.2 TESNorthERA5site validated workflow (committed scripts)
+
+Commit `f25e820` added the full PathFinder-ready TESNorthERA5site script set:
+
+| Script | Role |
+|--------|------|
+| `TES_AOI_domainGEN.py`, `TES_AOI_surfdataGEN.py`, `TES_AOI_forcingGEN*.py` | AOI subsetting generators |
+| `run_domain_surfdata.sh` | Domain + surfdata generation |
+| `run_forcing.sbatch` | Slurm MPI forcing job (scratch output, repo-root MPI script) |
+| `export_env.sh` | Case environment (`FORCING_OUT_DIR`, `FORCING_GEN_SCRIPT`, scheduler vars) |
+| `create_uELM_*.sh` | PathFinder E3SM case creation (`--mach pathfinder`) |
+| `create_links.sh`, `forcing_*_creation.py` | DATM forcing link setup |
+
+Manual scratch helpers (not required for new cases after §10.3):
+
+- [`TESNorthERA5site/scripts/run_forcinggen_scratch.sh`](TESNorthERA5site/scripts/run_forcinggen_scratch.sh) — early scratch test wrapper (copy-back was disabled during testing)
+
+### 10.3 Generator update (`aoi_prepare_experiment.py`)
+
+To make the validated workflow the **default for all future cases**, `aoi_prepare_experiment.py` was updated to generate:
+
+1. **Scratch-first forcing I/O** — `FORCING_OUT_DIR` defaults to `/scratch/hpcl-cli185/${USER}/<expid>/forcing`
+2. **Repo-root MPI script** — `FORCING_GEN_SCRIPT` defaults to `${REPO_ROOT}/TES_AOI_forcingGEN_mpi.py` so cases always pick up the latest fix without re-copying Python files
+3. **`FORCING_CHUNK_SIZE`** — default 32 (override via optional config key `forcing.chunk_size`)
+4. **`sync_forcing_to_project.sh`** — copies `TPHWL3Hrly`, `Precip3Hrly`, `Solar3Hrly` from scratch into `<case>/forcing/` on the project tree
+5. **`run_forcing.sbatch`** — runs MPI on scratch, then calls `sync_forcing_to_project.sh` automatically (no `exec`, so sync always runs)
+
+**Standard workflow for a new case:**
+
+```
+python aoi_prepare_experiment.py --config aoi_<case>_config.json
+  → run_domain_surfdata.sh
+  → sbatch run_forcing.sbatch        # MPI on scratch
+       → sync_forcing_to_project.sh  # copy to <case>/forcing/
+  → create_links.sh
+  → create_uELM_*.sh
+```
+
+### 10.4 Regenerated vs committed TESNorthERA5site scripts
+
+Re-running `aoi_prepare_experiment.py` on an **existing** case overwrites generated wrappers (`run_forcing.sbatch`, `export_env.sh`, `create_uELM_*.sh`, etc.). That is expected: the generator is the source of truth for new cases.
+
+The committed TESNorthERA5site scripts (from `f25e820` plus `aca4394`) were hand-tuned **before** the §10.3 generator update. Differences after a test re-prepare included:
+
+| Change | Committed TESNorthERA5site | After re-prepare |
+|--------|---------------------------|------------------|
+| Scratch → project sync | Not in `run_forcing.sbatch` | Adds `sync_forcing_to_project.sh` call |
+| `FORCING_CHUNK_SIZE` | Not passed to MPI script | Passed as 5th argument (default 32) |
+| `exec` in login-node path | Present (blocks post-run sync) | Removed |
+| `create_uELM_transient2.sh` | No `JOB_QUEUE` line | Generator adds `./xmlchange --force JOB_QUEUE="batch_ccsi"` |
+
+**Recommendation:** Keep the committed TESNorthERA5site scripts as the validated reference for that case until you intentionally re-prepare. For **new** cases, only run `aoi_prepare_experiment.py` once on a fresh experiment directory — the generated scripts will include §10.3 behavior automatically.
 
 ---
 
 ## 11. Immediate next actions
 
-1. **Fix Python environment** (§6) — required before any AOI generation script will run.
-2. **Run TESNorthERA5site workflow** — follow [`commands.txt`](commands.txt) § TESNorthERA5site, steps 3–7.
-3. **Re-run or validate TESNorthERA510PCT** on PathFinder if full 10% case is needed.
-4. **Push git changes** after confirming rebase outcome (§8).
+1. **Use `aoi_prepare_experiment.py` for new cases** — scratch forcing, repo-root MPI script, and project-tree sync are built in (§10.3).
+2. **Re-run or validate TESNorthERA510PCT** on PathFinder if the full 10% case is needed.
+3. **Push git changes** after confirming rebase outcome (§8).
 
 ---
 
-## 11. Key references
+## 12. Key references
 
 - Baseline backup case: `TESNorthERA510PCT_baseline_bk/`
 - PathFinder E3SM reference: `/projects/hpcl-cli185/proj-shared/wangd/kmELM/case_gene/PathFinder/TES_NORTHERA5/TES_NORTHERA5_ref.sh`
