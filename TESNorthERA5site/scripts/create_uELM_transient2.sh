@@ -99,3 +99,5 @@ EOF
 ./case.build --clean-all
 ./case.build
 
+./xmlchange --force JOB_QUEUE="batch_ccsi"
+

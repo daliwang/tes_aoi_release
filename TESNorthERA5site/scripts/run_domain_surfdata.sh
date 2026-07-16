@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source /software/baseline/nsp/init/profile
+
 : "${PYTHON_ENV:=${SHARED_CONDA_PREFIX:-$HOME/.conda/envs/tes_aoi}}"
 source /projects/hpcl-cli185/proj-shared/wangd/kiloCraft/python_test_env/activate_shared_env.sh "${PYTHON_ENV}"
 

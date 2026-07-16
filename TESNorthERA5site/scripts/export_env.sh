@@ -11,6 +11,9 @@ export SURFDATA_FILE="surfdata.TESSFA_DOMAIN1.4km.1d.NALCMS.c260218_yw.nc"
 export FORCING_DIR="/projects/hpcl-cli185/proj-shared/wangd/kiloCraft/TES_cases_data/Daymet_ERA5_TESSFA_NORTH/entire_domain/forcing"
 export FORCING_OUT_DIR="${FORCING_OUT_DIR:-/scratch/hpcl-cli185/${USER}/TESNorthERA5site/forcing}"
 export FORCING_GEN_SCRIPT="${FORCING_GEN_SCRIPT:-/projects/hpcl-cli185/proj-shared/wangd/uELM_TES_experiment/TES_AOI_forcingGEN_mpi.py}"
+export FORCING_CHUNK_SIZE="${FORCING_CHUNK_SIZE:-32}"
+export PYTHON_ENV="${PYTHON_ENV:-$HOME/.conda/envs/tes_aoi}"
+export PYTHONUNBUFFERED=1
 
 export SCHED_ACCOUNT="CLI185"
 export SCHED_PARTITION="hpcl-cli185"
@@ -19,5 +22,4 @@ export SCHED_NODES="1"
 export SCHED_TIME="12:00:00"
 export SCHED_MEM="400G"
 export SCHED_TASKS="4"
-export PYTHON_ENV="${PYTHON_ENV:-$HOME/.conda/envs/tes_aoi}"
-export PYTHONUNBUFFERED=1
+export SCHED_CPUS_PER_TASK="1"
